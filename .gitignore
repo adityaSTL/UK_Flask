@@ -1,0 +1,18 @@
+# Ignore Python bytecode files
+*.pyc
+__pycache__/
+
+# Ignore logs and temporary files
+*.log
+temp/
+
+# Ignore environment files
+.env
+
+# Ignore build directories
+build/
+dist/
+
+
+*.out
+*.xlsx
