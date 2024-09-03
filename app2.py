@@ -23,7 +23,8 @@ from sqlalchemy import func, extract, and_
 import numpy as np
 from flasgger import Swagger
 import calendar
-
+from email_validator import validate_email, EmailNotValidError
+from validate_email_address import validate_email as validate_existence
 
 app = Flask(__name__)
 
@@ -80,6 +81,7 @@ class User(db.Model):
     phone_no = db.Column(db.String(20), nullable=True)
     role = db.Column(db.String(20), nullable=False)
     can_edit = db.Column(db.Boolean, default=False)
+    # name = db.Column(db.String(100), default=False)
 
 
 class PnRaw(db.Model):
@@ -363,12 +365,15 @@ def register_user():
     hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
     new_user = User(username=username, password=hashed_password, email_id=email_id, phone_no=phone_no, role=role, can_edit=can_edit)
     db.session.add(new_user)
+    # send_welcome_email(email_id,)
     db.session.commit()
 
     return jsonify({'message': 'User registered successfully'}), 201
 
 
 @app.route('/api/edit_eod_dump/<int:seed>', methods=['PUT'])
+@jwt_required()
+@role_required(['admin', 'editor'])
 def edit_eod_dump(seed):
     # Get the record based on the primary key (Seed)
     record = EODDump.query.get(seed)
@@ -610,6 +615,71 @@ def calculate_cost(seed, eod_item):
 
 
 
+@app.route('/api/pn/sum_approved', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_pn_sum_approved():
+    try:
+        filters = request.args.to_dict()
+
+        # Validate and set pagination parameters
+        # limit = int(request.args.get('limit', 100))
+        # page = int(request.args.get('page', 1))
+
+        # Handle date range if provided
+        start_date = filters.get('start_date')
+        end_date = filters.get('end_date')
+
+        if start_date and end_date:
+            start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+            end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
+        else:
+            # Default to last 30 days if no date range is provided
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=30)
+
+        query = db.session.query(
+            PnRaw.date_of_application,
+            func.sum(PnRaw.approved_total).label('total_approved')
+        ).filter(
+            PnRaw.date_of_application.between(start_date, end_date)
+        ).group_by(
+            PnRaw.date_of_application
+        )
+        # Apply additional filters dynamically
+        for key, value in filters.items():
+            if key not in ['start_date', 'end_date'] and hasattr(PnRaw, key) and value:
+                query = query.filter(getattr(PnRaw, key) == value)
+        # total_records = query.with_entities(func.count(PnRaw.date_of_application)).scalar()
+        # print(total_records)
+
+        # Handle pagination
+        # data = query.offset((page - 1) * limit).limit(limit).all()
+        data=query.all()
+        # Format the response
+        aggregated_data = []
+        for row in data:
+            aggregated_data.append({
+                'date': row.date_of_application.strftime('%d-%m-%Y'),
+                'total_approved': float(row.total_approved)
+            })
+
+        response = {
+            # 'total_records': total_records,
+            # 'page': page,
+            # 'per_page': limit,
+            'data': aggregated_data
+        }
+
+        return jsonify(response), 200
+
+    except ValueError:
+        return jsonify({'error': 'Invalid input for limit or page'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
 @app.route('/api/pn', methods=['GET'])
 @jwt_required()
 @role_required(['admin', 'editor', 'viewer'])
@@ -699,7 +769,8 @@ def get_pn():
             if hasattr(PnRaw, key) and value:  # Check for non-empty values
                 query = query.filter(getattr(PnRaw, key) == value)
 
-        total_records = query.with_entities(func.count()).scalar()
+        total_records = query.with_entities(func.count(PnRaw.unique_id)).scalar()
+        print(total_records)
         data = query.offset((page - 1) * limit).limit(limit).all()
 
         response = {
@@ -715,6 +786,57 @@ def get_pn():
         return jsonify({'error': 'Invalid input for limit or page'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def send_welcome_email(to_email, name):
+    
+    print(reset_token)
+    # Gmail credentials
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587
+    from_email = 'stlautomation123@gmail.com'
+    password = 'thyuysdcdonpymsr'
+
+    # Create the email content
+    subject = 'Welcome to XX Portal'
+    body = '''
+    Hi {name},
+
+    We welcome you to STL UK project management portal. 
+    
+    Here are your credential to login the portal
+
+    Portal Link: http://10.100.130.76:5000
+    Username:
+    Password:
+
+    Kindly change password after login for security reasons and update your profile. 
+    
+    Happy Exploring!!
+    Team Automation
+    automation.gsb@stl.tech
+    '''
+
+    # Create a MIMEText object and set up the email headers
+    msg = MIMEMultipart()
+    msg['From'] = from_email
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        # Connect to the Gmail SMTP server and send the email
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()  # Upgrade the connection to a secure encrypted SSL/TLS connection
+        server.login(from_email, password)
+        server.send_message(msg)
+        server.quit()
+
+        print('Email sent successfully')
+    except Exception as e:
+        print(f'Failed to send email: {e}')
+
+
 
 
 def send_reset_email(to_email, reset_token):
@@ -762,6 +884,8 @@ def send_reset_email(to_email, reset_token):
 
 # Update the forgot password API to use email_id
 @app.route('/api/forgot_password', methods=['POST'])
+@jwt_required()
+@role_required(['admin', 'editor'])
 def forgot_password():
     """
     Request Password Reset
@@ -827,6 +951,8 @@ def forgot_password():
 
 # Update the reset password API to use email_id
 @app.route('/api/reset_password', methods=['POST'])
+@jwt_required()
+@role_required(['admin', 'editor'])
 def reset_password():
     """
     Reset User Password
@@ -1089,7 +1215,7 @@ def login():
     user = User.query.filter_by(username=username).first()
     if user and bcrypt.check_password_hash(user.password, password):
         access_token = create_access_token(identity=username)
-        return jsonify(access_token=access_token, role=user.role, can_edit=user.can_edit), 200
+        return jsonify(access_token=access_token, role=user.role, can_edit=user.can_edit, id=user.id), 200
     return jsonify({"msg": "Bad username or password"}), 401
 
 @app.route('/api/data', methods=['GET'])
@@ -1297,6 +1423,8 @@ def get_revenue_data():
 
 
 @app.route('/api/data/aggregated_revenue', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
 def get_aggregated_revenue_data():
     try:
         filters = request.args.to_dict()
@@ -1368,7 +1496,93 @@ def get_aggregated_revenue_data():
 
 
 
+
+# @app.route('/api/data/sum_revenue', methods=['GET'])
+# @jwt_required()
+# @role_required(['admin', 'editor', 'viewer'])
+# def get_sum_revenue_data():
+#     try:
+#         filters = request.args.to_dict()
+
+#         # Handle date range
+#         start_date = filters.get('start_date')
+#         end_date = filters.get('end_date')
+
+#         if start_date and end_date:
+#             start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+#             end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
+#         else:
+#             # Default to last 30 days if no date range is provided
+#             end_date = datetime.now().date()
+#             start_date = end_date - timedelta(days=30)
+
+#         query = db.session.query(
+#             EODDump.Date,
+#             func.sum(EODDump.Qty * ClientRate.rates).label('revenue'),
+            
+#         ).join(
+#             UserRevenue,
+#             func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)       
+#         ).join(
+#             ClientRate,
+#             EODDump.Item_Mst_ID == ClientRate.rate_code
+#         ).filter(
+#             EODDump.Date.between(start_date, end_date)
+#         ).group_by(
+#             EODDump.Date       
+#              )
+
+#         # Apply additional filters
+#         for key, value in filters.items():
+#             if key not in ['start_date', 'end_date'] and hasattr(EODDump, key):
+#                 query = query.filter(getattr(EODDump, key) == value)
+
+#         result = query.all()
+
+#         # aggregated_data = []
+#         # ************
+#         aggregated_data = []
+#         for row in result:
+#             # Categorize the approved_status
+#             if row.Approved_Status.lower() in ['approved']:
+#                 status_category = 'approved'
+#             elif row.Approved_Status.lower() in ['rejected']:
+#                 status_category = 'rejected'
+#             else:
+#                 status_category = 'risk'
+
+#             aggregated_data.append({
+#                 'date': row.Date.strftime('%d-%m-%Y'),
+#                 'approved_status': status_category,
+#                 'revenue_generating_entity': row.revenue_generating_entity,
+#                 'revenue': float(row.revenue),
+#             })
+
+#         response = {
+#             'total_records': len(aggregated_data),
+#             'data': aggregated_data
+#         }
+#         # ************
+#         # for row in result:
+#         #     aggregated_data.append({
+#         #         'date': row.Date.strftime('%d-%m-%Y'),
+#         #         'revenue': float(row.revenue),
+#         #     })
+
+#         # response = {
+#         #     'total_records': len(aggregated_data),
+#         #     'data': aggregated_data
+#         # }
+
+#         return jsonify(response)
+
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/data/sum_revenue', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
 def get_sum_revenue_data():
     try:
         filters = request.args.to_dict()
@@ -1388,7 +1602,7 @@ def get_sum_revenue_data():
         query = db.session.query(
             EODDump.Date,
             func.sum(EODDump.Qty * ClientRate.rates).label('revenue'),
-            
+            EODDump.Approved_Status
         ).join(
             UserRevenue,
             func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)       
@@ -1398,20 +1612,38 @@ def get_sum_revenue_data():
         ).filter(
             EODDump.Date.between(start_date, end_date)
         ).group_by(
-            EODDump.Date       
-             )
+            EODDump.Date,
+            EODDump.Approved_Status
+        )
 
         # Apply additional filters
         for key, value in filters.items():
-            if key not in ['start_date', 'end_date'] and hasattr(EODDump, key):
+            if key not in ['start_date', 'end_date', 'approved_status'] and hasattr(EODDump, key):
                 query = query.filter(getattr(EODDump, key) == value)
+
+        if 'approved_status' in filters:
+            approved_status_filter = filters['approved_status'].lower()
+            if approved_status_filter in ['approved', 'rejected']:
+                query = query.filter(func.lower(EODDump.Approved_Status) == approved_status_filter)
+            else:
+                query = query.filter(~EODDump.Approved_Status.in_(['approved', 'rejected']))
 
         result = query.all()
 
+        # Aggregate the data
         aggregated_data = []
         for row in result:
+            # Categorize the approved_status
+            if row.Approved_Status.lower() == 'approved':
+                status_category = 'approved'
+            elif row.Approved_Status.lower() == 'rejected':
+                status_category = 'rejected'
+            else:
+                status_category = 'risk'
+
             aggregated_data.append({
                 'date': row.Date.strftime('%d-%m-%Y'),
+                'approved_status': status_category,
                 'revenue': float(row.revenue),
             })
 
@@ -1427,7 +1659,10 @@ def get_sum_revenue_data():
 
 
 
+
 @app.route('/api/data/sum_cost', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor'])
 def get_sum_cost_data():
     try:
         filters = request.args.to_dict()
@@ -1461,8 +1696,8 @@ def get_sum_cost_data():
             func.sum(EODDump.Qty * SubcontractorRate.set).label('cost_set')
             
         ).join(
-            UserRevenue,
-            func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)       
+            WorkCat,
+            func.lower(WorkCat.Rate_Code) == func.lower(EODDump.Item_Mst_ID)       
         ).join(
             SubcontractorRate,
             EODDump.Item_Mst_ID == SubcontractorRate.rate_code
@@ -1471,6 +1706,12 @@ def get_sum_cost_data():
         ).group_by(
             EODDump.Date       
              )
+
+
+        # Apply the 'Category' filter from the WorkCat table
+        if 'Category' in filters:
+            category_value = filters.get('Category')
+            query = query.filter(WorkCat.Category == category_value)
 
         # Apply additional filters
         for key, value in filters.items():
@@ -1518,78 +1759,12 @@ def get_sum_cost_data():
 
 
 
-# @app.route('/api/invoice_revenue_breakup', methods=['GET'])
-# def get_invoice_revenue_breakup():
-#     try:
-#         # Query to get total invoice amount approved per month
-#         invoice_query = db.session.query(
-#             extract('year', PnRaw.date_of_application).label('year'),
-#             extract('month', PnRaw.date_of_application).label('month'),
-#             func.sum(PnRaw.approved_total).label('total_invoice')
-#         ).group_by(
-#             extract('year', PnRaw.approved_total),
-#             extract('month', PnRaw.approved_total)
-#         ).subquery()
 
-#         # Query to get the revenue breakup for each invoice month
-#         revenue_query = db.session.query(
-#             extract('year', EODDump.Date).label('rev_year'),
-#             extract('month', EODDump.Date).label('rev_month'),
-#             extract('year', PnRaw.date_of_application).label('inv_year'),
-#             extract('month', PnRaw.date_of_application).label('inv_month'),
-#             func.sum(EODDump.Total).label('total_revenue')
-#         ).join(
-#             PnRaw,
-#             and_(
-#                 func.right(EODDump.Job_Pack_No, 6) == PnRaw.polygon_id,
-#                 EODDump.Route == PnRaw.feature_id,
-#                 EODDump.Item_Mst_ID == PnRaw.code
-#             )
-#         ).filter(
-#             extract('year', EODDump.Date) <= extract('year', PnRaw.date_of_application),
-#             extract('month', EODDump.Date) <= extract('month', PnRaw.date_of_application)
-#         ).group_by(
-#             extract('year', EODDump.Date),
-#             extract('month', EODDump.Date),
-#             extract('year', PnRaw.date_of_application),
-#             extract('month', PnRaw.date_of_application)
-#         ).all()
-
-#         # Aggregate the data into the desired structure
-#         response_data = {}
-#         for inv_year, inv_month, total_invoice in db.session.query(invoice_query).all():
-#             inv_date = f"{inv_year}-{inv_month:02}"
-#             if inv_date not in response_data:
-#                 response_data[inv_date] = {
-#                     "total_invoice": total_invoice,
-#                     "revenue_breakup": []
-#                 }
-        
-#         for rev_year, rev_month, inv_year, inv_month, total_revenue in revenue_query:
-#             inv_date = f"{inv_year}-{inv_month:02}"
-#             rev_date = f"{rev_year}-{rev_month:02}"
-#             if inv_date in response_data:
-#                 response_data[inv_date]["revenue_breakup"].append({
-#                     "month": rev_date,
-#                     "revenue": total_revenue
-#                 })
-
-#         # Convert the data to a list for JSON response
-#         result = []
-#         for inv_date, data in response_data.items():
-#             result.append({
-#                 "invoice_month": inv_date,
-#                 "total_invoice": data["total_invoice"],
-#                 "revenue_breakup": data["revenue_breakup"]
-#             })
-
-#         return jsonify(result)
-
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/dashboard_data')
+@jwt_required()
+@role_required(['admin', 'editor'])
 def dashboard_data():
     # Get all months with invoice data
     invoice_months = db.session.query(
@@ -1639,6 +1814,97 @@ def dashboard_data():
         result.append(month_data)
 
     return jsonify(result)
+
+
+
+
+@app.route('/dashboard_data1', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def dashboard_data1():
+    try:
+        # Get the current date
+        today = datetime.now()
+        # Calculate the date 6 months ago
+        six_months_ago = today - timedelta(days=180)  # Approximate 6 months
+
+        # Query for the last 6 months of data
+        last_6_months_data = db.session.query(
+            func.date_format(PnRaw.date_of_application, '%Y-%m').label('month'),
+            func.sum(PnRaw.approved_total).label('total_invoice')
+        ).filter(
+            PnRaw.date_of_application >= six_months_ago
+        ).group_by('month').all()
+
+        # Query for months older than 6 months
+        older_months_data = db.session.query(
+            func.date_format(PnRaw.date_of_application, '%Y-%m').label('month'),
+            func.sum(PnRaw.approved_total).label('total_invoice')
+        ).filter(
+            PnRaw.date_of_application < six_months_ago
+        ).group_by('month').all()
+
+        # Function to calculate revenue breakup for a given set of months
+        def get_revenue_breakup(months_data):
+            result = []
+            for invoice_month, total_invoice in months_data:
+                month_data = {
+                    'month': invoice_month,
+                    'total_invoice': float(total_invoice),
+                    'total_revenue': 0,  # Initialize total_revenue
+                    'revenue_breakup': []
+                }
+
+                # Get start and end date for each month
+                start_date = datetime.strptime(invoice_month, '%Y-%m')
+                end_date = datetime(start_date.year, start_date.month, calendar.monthrange(start_date.year, start_date.month)[1])
+
+                revenue_breakup = db.session.query(
+                    func.date_format(EODDump.Date, '%Y-%m').label('revenue_month'),
+                    func.sum(EODDump.Qty * ClientRate.rates).label('revenue')
+                ).join(
+                    UserRevenue,
+                    func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)
+                ).join(
+                    ClientRate,
+                    EODDump.Item_Mst_ID == ClientRate.rate_code
+                ).join(
+                    PnRaw,
+                    PnRaw.seed == EODDump.Seed
+                ).filter(
+                    PnRaw.date_of_application.between(start_date, end_date)
+                ).group_by(
+                    'revenue_month'
+                ).all()
+
+                # Add revenue breakup to the month's data
+                for revenue_month, revenue in revenue_breakup:
+                    month_data['revenue_breakup'].append({
+                        'month': revenue_month,
+                        'revenue': float(revenue)
+                    })
+                    month_data['total_revenue'] += float(revenue)  # Add to total_revenue
+
+                result.append(month_data)
+            return result
+
+        # Get revenue data for the last 6 months
+        last_6_months_result = get_revenue_breakup(last_6_months_data)
+
+        # Get revenue data for months older than 6 months
+        older_months_result = get_revenue_breakup(older_months_data)
+
+        # Prepare the response
+        response = {
+            'last_6_months': last_6_months_result,
+            'older_months': older_months_result
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 
 @app.route('/api/manage_user', methods=['POST'])
@@ -1704,6 +1970,7 @@ def update_user(id):
 # Delete a user
 @app.route('/api/users/<int:id>', methods=['DELETE'])
 @jwt_required()
+@role_required(['admin', 'editor'])
 def delete_user(id):
     user = User.query.get(id)
     if not user:
@@ -1756,134 +2023,7 @@ def update_revenue_status():
 
 
 
-# @app.route('/api/get_revenue', methods=['POST'])
-# @jwt_required()
-# @role_required(['admin', 'viewer', 'editor'])
-# def get_revenue():
-#     user = User.query.filter_by(username=get_jwt_identity()).first()
-#     print(user)
 
-#     data = request.json
-#     print("Received data:", data)  # Debug statement
-#     seeds = data.get('Seeds')
-    
-#     if not seeds or not isinstance(seeds, list):
-#         return jsonify({"success": False, "message": "Seeds parameter is required and must be a list"}), 400
-    
-#     try:
-#         revenue_results = {}
-#         for seed in seeds:
-#             total_revenue = db.session.query(
-#                 db.func.sum(EODDump.Qty * ClientRate.rates)
-#             ).join(
-#                 ClientRate, EODDump.Item_Mst_ID == ClientRate.rate_code
-#             ).filter(
-#                 EODDump.Seed == seed
-#             ).scalar()
-            
-#             revenue_results[seed] = total_revenue if total_revenue is not None else 0
-        
-#         return jsonify({"success": True, "revenue": revenue_results})
-        
-#     except Exception as e:
-#         return jsonify({"success": False, "message": str(e)}), 500
-
-
-
-
-
-
-# @app.route('/api/calculate_cost', methods=['POST'])
-# @jwt_required()
-# @role_required(['admin', 'editor'])
-# def calculate_cost():
-#     data = request.json
-#     if not data or 'seeds' not in data:
-#         return jsonify({"error": "Invalid input. 'seeds' is required."}), 400
-
-#     seeds = data['seeds']
-    
-#     ooh_rates = SubcontractorRate.query.filter_by(rate_code='OOH001').first()
-    
-#     results = []
-#     for seed in seeds:
-#         eod_item = EODDump.query.filter_by(Seed=seed).first()
-#         if not eod_item:
-#             results.append({"seed": seed, "error": "EOD item not found"})
-#             continue
-
-#         # Get revenue_generating_entity from user_revenue table
-#         user_rev = UserRevenue.query.filter(func.lower(UserRevenue.user_name) == func.lower(eod_item.User_Name)).first()
-#         if not user_rev:
-#             results.append({
-#                 "seed": seed,
-#                 "error": f"User {eod_item.User_Name} not found in UserRevenue table"
-#             })
-#             continue
-        
-#         revenue_generating_entity = user_rev.revenue_generating_entity
-
-#         # If revenue_generating_entity is "SET", cost is 0
-#         if revenue_generating_entity.upper() == "SET":
-#             results.append({
-#                 "seed": seed,
-#                 "date": eod_item.Date.strftime('%Y-%m-%d') if eod_item.Date else None,
-#                 "item_mst_id": eod_item.Item_Mst_ID,
-#                 "qty": eod_item.Qty,
-#                 "username": eod_item.User_Name,
-#                 "revenue_generating_entity": revenue_generating_entity,
-#                 "rate": 0,
-#                 "cost": 0,
-#                 "is_weekend": False,
-#                 "weekend_rate": 0
-#             })
-#             continue
-
-#         # Get rate from subcontractor_rate table
-#         subcontractor_rate = SubcontractorRate.query.filter_by(rate_code=eod_item.Item_Mst_ID).first()
-#         if not subcontractor_rate:
-#             results.append({
-#                 "seed": seed,
-#                 "error": f"Rate not found for Item_Mst_ID: {eod_item.Item_Mst_ID}"
-#             })
-#             continue
-        
-#         # Get the rate for the specific revenue_generating_entity
-#         rate = getattr(subcontractor_rate, revenue_generating_entity.lower(), None)
-#         if rate is None:
-#             results.append({
-#                 "seed": seed,
-#                 "error": f"Rate not found for entity: {revenue_generating_entity}"
-#             })
-#             continue
-        
-#         # Calculate base cost
-#         base_cost = float(eod_item.Qty) * float(rate)
-        
-#         # Check if the date is a weekend
-#         is_weekend = False
-#         weekend_rate = 0
-#         if eod_item.Date:
-#             if eod_item.Date.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-#                 is_weekend = True
-#                 weekend_rate = getattr(ooh_rates, revenue_generating_entity.lower(), 0)
-#                 if weekend_rate:
-#                     base_cost *= (1 + float(weekend_rate) / 100)  # Increase by percentage
-
-#         results.append({
-#             "seed": seed,
-#             "date": eod_item.Date.strftime('%Y-%m-%d') if eod_item.Date else None,
-#             "item_mst_id": eod_item.Item_Mst_ID,
-#             "qty": eod_item.Qty,
-#             "username": eod_item.User_Name,
-#             "revenue_generating_entity": revenue_generating_entity,
-#             "rate": float(rate),
-#             "cost": base_cost,
-#             "is_weekend": is_weekend,
-#             "weekend_rate": float(weekend_rate) if weekend_rate else 0
-#         })
-    
-#     return jsonify(results)
 
 @app.route('/api/upload', methods=['POST'])
 @jwt_required()

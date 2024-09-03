@@ -17,11 +17,40 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from sqlalchemy.orm import relationship, foreign, remote
 from sqlalchemy import MetaData, Table, select
-
+from sqlalchemy import func, case, cast, Float
+from sqlalchemy import inspect
+from sqlalchemy import func, extract, and_
+import numpy as np
+from flasgger import Swagger
+import calendar
+from email_validator import validate_email, EmailNotValidError
+from validate_email_address import validate_email as validate_existence
 
 app = Flask(__name__)
 
+app.config['SWAGGER'] = {
+    'title': 'Flask UK',
+    'uiversion': 3,
+    'version': '1.0',
+    'description': 'List of All APIs with documentation',
+    'termsOfService': 'http://example.com/terms',
+    'contact': {
+        'name': 'Flask UK',
+        'url': 'https://stl.tech',
+        'email': 'automation.gsb@stl.tech'
+    },
+    'license': {
+        'name': 'Apache 2.0',
+        'url': 'https://www.apache.org/licenses/LICENSE-2.0.html'
+    }
+}
+swagger = Swagger(app)
+
+
 CORS(app)
+# swagger = Swagger(app)
+
+
 
 db_user = os.getenv('DB_USER')
 db_password = os.getenv('DB_PASSWORD')
@@ -46,12 +75,13 @@ engine = create_engine(app.config['SQLALCHEMY_DATABASE_URI'])
 # Database Models
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
+    username = db.Column(db.String(80), nullable=False)
     password = db.Column(db.String(120), nullable=False)
     email_id = db.Column(db.String(120), unique=True, nullable=False)
     phone_no = db.Column(db.String(20), nullable=True)
     role = db.Column(db.String(20), nullable=False)
     can_edit = db.Column(db.Boolean, default=False)
+    # name = db.Column(db.String(100), default=False)
 
 
 class PnRaw(db.Model):
@@ -59,8 +89,8 @@ class PnRaw(db.Model):
     unique_id = db.Column(db.String(100), primary_key=True)
     payment_notice_id = db.Column(db.String(100))
     contractor_afp_ref = db.Column(db.String(100))
-    pn_date_issued_to_contractor = db.Column(db.String(100))
-    date_of_application = db.Column(db.String(100))
+    pn_date_issued_to_contractor = db.Column(db.Date)
+    date_of_application = db.Column(db.Date)
     purchase_order_id = db.Column(db.String(100))
     region = db.Column(db.String(100))
     exchange_id = db.Column(db.String(100))
@@ -73,20 +103,28 @@ class PnRaw(db.Model):
     code = db.Column(db.String(100))
     item = db.Column(db.String(255))
     unit = db.Column(db.String(100))
-    price = db.Column(db.String(100))
-    quantity = db.Column(db.String(100))
-    total = db.Column(db.String(100))
+    price = db.Column(db.DECIMAL(10, 5))
+    quantity = db.Column(db.DECIMAL(10, 5))
+    total = db.Column(db.DECIMAL(10, 2))
     comments = db.Column(db.String(255))
     afp_claim_ok_nok = db.Column(db.String(100))
     nok_reason_code = db.Column(db.String(100))
-    approved_quantity = db.Column(db.String(100))
-    approved_total = db.Column(db.String(100))
+    approved_quantity = db.Column(db.DECIMAL(10, 5))
+    approved_total = db.Column(db.DECIMAL(10, 5))
     concate = db.Column(db.String(100))
-    qgis_quant = db.Column(db.String(100))
-    qgis_rate = db.Column(db.String(100))
+    qgis_quant = db.Column(db.DECIMAL(10, 5))
+    qgis_rate = db.Column(db.DECIMAL(10, 5))
     qgis_url = db.Column(db.String(255))
     po_check = db.Column(db.String(100))
     comment = db.Column(db.String(255))
+    comment_stl=db.Column(db.String(255))
+    resubmission = db.Column(db.Boolean, default=False)
+    seed = db.Column(db.Integer, db.ForeignKey('eod_dump.Seed'))
+
+
+    def to_dict(self):
+        """Convert the SQLAlchemy object to a dictionary."""
+        return {c.key: getattr(self, c.key) for c in inspect(self).mapper.column_attrs}
 
 
 class ActivityLog(db.Model):
@@ -128,6 +166,7 @@ class SubcontractorRate(db.Model):
     upscale = db.Column(db.DECIMAL(10, 2), nullable=True)
     vsl = db.Column(db.DECIMAL(10, 2), nullable=True)
     vus = db.Column(db.DECIMAL(10, 2), nullable=True)
+    set = db.Column(db.DECIMAL(10, 2), nullable=True)
 
     def to_dict(self):
         return {column.name: getattr(self, column.name) for column in self.__table__.columns}
@@ -220,7 +259,75 @@ class EODDump(db.Model):
 
 
 
+def validate_email_id(email):
+    try:
+        # Step 1: Validate the syntax of the email
+        valid = validate_email(email)
+        normalized_email = valid.email  # Get the normalized form of the email (lowercase, no extra spaces, etc.)
 
+        # Step 2: Check if the domain and email exist (MX and SMTP check)
+        # if validate_existence(email, verify=True):
+        #     print(f"Email '{normalized_email}' is valid and exists.")
+        #     return 1
+
+        if valid:
+            print(f"Email '{normalized_email}' has a valid syntax but may not exist (SMTP check not done).")
+            return 1
+    
+    except EmailNotValidError as e:
+        # Handle invalid email syntax
+        print(f"Invalid email syntax: {str(e)}")
+        return 0
+
+
+def send_welcome_email(to_email, password,name):
+    
+    # print(reset_token)
+    # Gmail credentials
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587
+    from_email = 'stlautomation123@gmail.com'
+    password = 'thyuysdcdonpymsr'
+
+    # Create the email content
+    subject = 'Welcome to XX Portal'
+    body = '''
+    Hi {name},
+
+    We welcome you to STL UK project management portal. 
+    
+    Here are your credential to login the portal
+
+    Portal Link: "http://10.100.130.76:5000"
+    Username: {name}
+    Email id: {to_email}
+    Password: {password}
+
+    Kindly change password after login for security reasons and update your profile. 
+    
+    Happy Exploring!!
+    Team Automation
+    automation.gsb@stl.tech
+    '''.format(name=name, to_email=to_email, password=password)
+
+    # Create a MIMEText object and set up the email headers
+    msg = MIMEMultipart()
+    msg['From'] = from_email
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        # Connect to the Gmail SMTP server and send the email
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()  # Upgrade the connection to a secure encrypted SSL/TLS connection
+        server.login(from_email, password)
+        server.send_message(msg)
+        server.quit()
+
+        print('Email sent successfully')
+    except Exception as e:
+        print(f'Failed to send email: {e}')
 
 
 # Role-Based Access Control Decorator
@@ -229,12 +336,14 @@ def role_required(roles):
         @wraps(fn)
         def decorator(*args, **kwargs):
             verify_jwt_in_request()
-            current_user = User.query.filter_by(username=get_jwt_identity()).first()
+            current_user = User.query.filter_by(email_id=get_jwt_identity()).first()
             if current_user.role not in roles:
                 return jsonify({"msg": "Unauthorized access"}), 403
             return fn(*args, **kwargs)
         return decorator
     return wrapper
+
+
 
 
 
@@ -304,9 +413,392 @@ def register_user():
       403:
         description: Forbidden - User does not have admin role
     """
-    # Your existing function code here
-    ...
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    email_id = data.get('email_id')
+    phone_no = data.get('phone_no')
+    role = data.get('role')
+    can_edit = data.get('can_edit', False)
+    print(username,password,email_id,phone_no,role,can_edit)
 
+
+    
+    if not username or not password or not email_id or not role:
+        return jsonify({'error': 'Username, password, email_id, and role are required'}), 400
+
+    if validate_email_id(email_id)==0:
+        return jsonify({'error': 'Email Id does not exists'}), 400
+
+    if User.query.filter_by(email_id=email_id).first():
+        return jsonify({'error': 'User already exists'}), 400
+
+    if User.query.filter_by(email_id=email_id).first():
+        return jsonify({'error': 'Email ID already in use'}), 400
+
+    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+    new_user = User(username=username, password=hashed_password, email_id=email_id, phone_no=phone_no, role=role, can_edit=can_edit)
+    db.session.add(new_user)
+    send_welcome_email(email_id,password,username)
+    db.session.commit()
+
+    return jsonify({'message': 'User registered successfully'}), 201
+
+
+
+# PUT request to update an existing work category record
+@app.route('/api/work_cat/<string:rate_code>', methods=['PUT'])
+def update_work_cat(rate_code):
+    # Fetch the work category by Rate_Code
+    work_cat = WorkCat.query.get_or_404(rate_code)
+
+    # Get the data from the request
+    data = request.json
+
+    # Update fields if they are provided in the request
+    work_cat.Category = data.get('Category', work_cat.Category)
+
+    # Commit changes to the database
+    db.session.commit()
+
+    return jsonify(work_cat.to_dict()), 200
+
+
+# DELETE request to delete a work category record by Rate_Code
+@app.route('/api/work_cat/<string:rate_code>', methods=['DELETE'])
+def delete_work_cat(rate_code):
+    # Fetch the work category by Rate_Code
+    work_cat = WorkCat.query.get_or_404(rate_code)
+
+    # Delete the record from the database
+    db.session.delete(work_cat)
+    db.session.commit()
+
+    return jsonify({"message": "Work category deleted successfully"}), 200
+
+
+# PUT request to update an existing user revenue record
+@app.route('/api/user_revenue/<int:id>', methods=['PUT'])
+def update_user_revenue(id):
+    # Fetch the user revenue by ID
+    user_revenue = UserRevenue.query.get_or_404(id)
+
+    # Get the data from the request
+    data = request.json
+
+    # Update fields if they are provided in the request
+    user_revenue.user_name = data.get('user_name', user_revenue.user_name)
+    user_revenue.revenue_generating_entity = data.get('revenue_generating_entity', user_revenue.revenue_generating_entity)
+
+    # Commit changes to the database
+    db.session.commit()
+
+    return jsonify(user_revenue.to_dict()), 200
+
+
+# DELETE request to delete a user revenue record by ID
+@app.route('/api/user_revenue/<int:id>', methods=['DELETE'])
+def delete_user_revenue(id):
+    # Fetch the user revenue by ID
+    user_revenue = UserRevenue.query.get_or_404(id)
+
+    # Delete the record from the database
+    db.session.delete(user_revenue)
+    db.session.commit()
+
+    return jsonify({"message": "User revenue deleted successfully"}), 200
+
+
+
+@app.route('/api/edit_eod_dump/<int:seed>', methods=['PUT'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def edit_eod_dump(seed):
+    # Get the record based on the primary key (Seed)
+    record = EODDump.query.get(seed)
+    
+    if not record:
+        return jsonify({'error': 'Record not found'}), 404
+
+    # Update the fields from the request data
+    data = request.json
+
+    # List of allowed fields to update
+    allowed_fields = [
+        'Date', 'TeamLeader', 'Gang', 'Work_Type', 'Item_Mst_ID', 'Item_Description',
+        'Activity', 'WeekNumber', 'Output_Date_MonthYear', 'Qty', 'UOM', 'Rate', 'Total',
+        'Area', 'Mst_Item_Rpt_Group1', 'Project_ID', 'Project_Name', 'Comment',
+        'Planning_KPI1', 'Email_ID', 'User_Name', 'AuditLog', 'Work_Period', 'Job_Pack_No',
+        'Route', 'Work_Category', 'Approved_Status', 'PMO_Coordinator', 'QA_remarks', 
+        'Span_length', 'Taken_To_Revenue', 'Taken_To_Revenue_Date'
+    ]
+
+    for field in allowed_fields:
+        if field in data:
+            setattr(record, field, data[field])
+
+    try:
+        db.session.commit()
+        return jsonify({'message': 'Record updated successfully', 'record': record.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/api/pn_raw/<unique_id>', methods=['DELETE'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def delete_pn_raw(unique_id):
+    try:
+        # Query the PnRaw table to find the record with the given unique_id
+        record = db.session.query(PnRaw).filter(PnRaw.unique_id == unique_id).first()
+        
+        # Check if the record exists
+        if record is None:
+            return jsonify({"message": "Record not found"}), 404
+        
+        # Delete the record
+        db.session.delete(record)
+        db.session.commit()
+        
+        return jsonify({"message": "Record deleted successfully"}), 200
+    
+    except Exception as e:
+        db.session.rollback()  # Rollback in case of error
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+# PUT request to update an existing subcontractor rate
+@app.route('/api/subcontractor_rate/<int:id>', methods=['PUT'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def update_subcontractor_rate(id):
+    # Fetch the subcontractor rate by ID
+    subcontractor_rate = SubcontractorRate.query.get_or_404(id)
+
+    # Get the data from the request
+    data = request.json
+
+    # Update fields if they are provided in the request
+    subcontractor_rate.rate_code = data.get('rate_code', subcontractor_rate.rate_code)
+    subcontractor_rate.work_category = data.get('work_category', subcontractor_rate.work_category)
+    subcontractor_rate.rate_type = data.get('rate_type', subcontractor_rate.rate_type)
+    subcontractor_rate.item = data.get('item', subcontractor_rate.item)
+    subcontractor_rate.unit = data.get('unit', subcontractor_rate.unit)
+    subcontractor_rate.heavy_and_dirty = data.get('heavy_and_dirty', subcontractor_rate.heavy_and_dirty)
+    subcontractor_rate.include_hnd_in_service_price = data.get('include_hnd_in_service_price', subcontractor_rate.include_hnd_in_service_price)
+    subcontractor_rate.description = data.get('description', subcontractor_rate.description)
+    subcontractor_rate.afs = data.get('afs', subcontractor_rate.afs)
+    subcontractor_rate.bk_comms = data.get('bk_comms', subcontractor_rate.bk_comms)
+    subcontractor_rate.ccg = data.get('ccg', subcontractor_rate.ccg)
+    subcontractor_rate.jk_comms = data.get('jk_comms', subcontractor_rate.jk_comms)
+    subcontractor_rate.jdc = data.get('jdc', subcontractor_rate.jdc)
+    subcontractor_rate.jto = data.get('jto', subcontractor_rate.jto)
+    subcontractor_rate.nola = data.get('nola', subcontractor_rate.nola)
+    subcontractor_rate.rollo = data.get('rollo', subcontractor_rate.rollo)
+    subcontractor_rate.salcs = data.get('salcs', subcontractor_rate.salcs)
+    subcontractor_rate.upscale = data.get('upscale', subcontractor_rate.upscale)
+    subcontractor_rate.vsl = data.get('vsl', subcontractor_rate.vsl)
+    subcontractor_rate.vus = data.get('vus', subcontractor_rate.vus)
+    subcontractor_rate.set = data.get('set', subcontractor_rate.set)
+
+    # Commit changes to the database
+    db.session.commit()
+
+    return jsonify(subcontractor_rate.to_dict()), 200
+
+# DELETE request to delete a subcontractor rate by ID
+@app.route('/api/subcontractor_rate/<int:id>', methods=['DELETE'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def delete_subcontractor_rate(id):
+    # Fetch the subcontractor rate by ID
+    subcontractor_rate = SubcontractorRate.query.get_or_404(id)
+
+    # Delete the record from the database
+    db.session.delete(subcontractor_rate)
+    db.session.commit()
+
+    return jsonify({"message": "Subcontractor rate deleted successfully"}), 200    
+
+
+# PUT request to update an existing client rate
+@app.route('/api/client_rate/<string:rate_code>', methods=['PUT'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def update_client_rate(rate_code):
+    # Fetch the client rate by rate_code
+    client_rate = ClientRate.query.get_or_404(rate_code)
+
+    # Get the data from the request
+    data = request.json
+
+    # Update fields if they are provided in the request
+    client_rate.rate_type = data.get('rate_type', client_rate.rate_type)
+    client_rate.item = data.get('item', client_rate.item)
+    client_rate.unit = data.get('unit', client_rate.unit)
+    client_rate.heavy_and_dirty = data.get('heavy_and_dirty', client_rate.heavy_and_dirty)
+    client_rate.include_hnd_in_service_price = data.get('include_hnd_in_service_price', client_rate.include_hnd_in_service_price)
+    client_rate.rates = data.get('rates', client_rate.rates)
+    client_rate.comments = data.get('comments', client_rate.comments)
+
+    # Commit changes to the database
+    db.session.commit()
+
+    return jsonify({
+        "rate_code": client_rate.rate_code,
+        "rate_type": client_rate.rate_type,
+        "item": client_rate.item,
+        "unit": client_rate.unit,
+        "heavy_and_dirty": client_rate.heavy_and_dirty,
+        "include_hnd_in_service_price": client_rate.include_hnd_in_service_price,
+        "rates": client_rate.rates,
+        "comments": client_rate.comments
+    }), 200
+
+
+# DELETE request to delete a client rate by rate_code
+@app.route('/api/client_rate/<string:rate_code>', methods=['DELETE'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def delete_client_rate(rate_code):
+    # Fetch the client rate by rate_code
+    client_rate = ClientRate.query.get_or_404(rate_code)
+
+    # Delete the record from the database
+    db.session.delete(client_rate)
+    db.session.commit()
+
+    return jsonify({"message": "Client rate deleted successfully"}), 200    
+
+
+@app.route('/api/pn/<string:unique_id>', methods=['PUT'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def update_pn(unique_id):
+    """
+    Update an existing Payment Notice (PN) entry
+    ---
+    tags:
+      - Payment Notice
+    security:
+      - JWT: []
+    parameters:
+      - name: unique_id
+        in: path
+        type: string
+        required: true
+        description: The unique ID of the PN entry to update
+      - name: body
+        in: body
+        required: true
+        description: The fields to update
+        schema:
+          type: object
+          properties:
+            payment_notice_id:
+              type: string
+            contractor_afp_ref:
+              type: string
+            pn_date_issued_to_contractor:
+              type: string
+              format: date
+            date_of_application:
+              type: string
+              format: date
+            purchase_order_id:
+              type: string
+            region:
+              type: string
+            exchange_id:
+              type: string
+            town:
+              type: string
+            contractor:
+              type: string
+            polygon_type:
+              type: string
+            polygon_id:
+              type: string
+            feature_id:
+              type: string
+            build_status:
+              type: string
+            code:
+              type: string
+            item:
+              type: string
+            unit:
+              type: string
+            price:
+              type: number
+              format: decimal
+            quantity:
+              type: number
+              format: decimal
+            total:
+              type: number
+              format: decimal
+            comments:
+              type: string
+            afp_claim_ok_nok:
+              type: string
+            nok_reason_code:
+              type: string
+            approved_quantity:
+              type: number
+              format: decimal
+            approved_total:
+              type: number
+              format: decimal
+            concate:
+              type: string
+            qgis_quant:
+              type: number
+              format: decimal
+            qgis_rate:
+              type: number
+              format: decimal
+            qgis_url:
+              type: string
+            po_check:
+              type: string
+            comment:
+              type: string
+    responses:
+      200:
+        description: Successfully updated
+      400:
+        description: Bad request - Invalid input or missing data
+      401:
+        description: Unauthorized - Invalid or missing token
+      403:
+        description: Forbidden - User does not have required role
+      404:
+        description: Not found - PN entry does not exist
+      500:
+        description: Internal server error
+    """
+    try:
+        pn_entry = PnRaw.query.get(unique_id)
+        if not pn_entry:
+            return jsonify({'error': 'PN entry not found'}), 404
+
+        data = request.json
+        for key, value in data.items():
+            if hasattr(pn_entry, key):
+                setattr(pn_entry, key, value)
+
+        db.session.commit()
+
+        return jsonify({'message': 'PN entry updated successfully', 'data': pn_entry.to_dict()}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/logout', methods=['POST'])
@@ -371,15 +863,80 @@ def calculate_cost(seed, eod_item):
 
 
 
+@app.route('/api/pn/sum_approved', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_pn_sum_approved():
+    try:
+        filters = request.args.to_dict()
+
+        # Validate and set pagination parameters
+        # limit = int(request.args.get('limit', 100))
+        # page = int(request.args.get('page', 1))
+
+        # Handle date range if provided
+        start_date = filters.get('start_date')
+        end_date = filters.get('end_date')
+
+        if start_date and end_date:
+            start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+            end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
+        else:
+            # Default to last 30 days if no date range is provided
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=30)
+
+        query = db.session.query(
+            PnRaw.date_of_application,
+            func.sum(PnRaw.approved_total).label('total_approved')
+        ).filter(
+            PnRaw.date_of_application.between(start_date, end_date)
+        ).group_by(
+            PnRaw.date_of_application
+        )
+        # Apply additional filters dynamically
+        for key, value in filters.items():
+            if key not in ['start_date', 'end_date'] and hasattr(PnRaw, key) and value:
+                query = query.filter(getattr(PnRaw, key) == value)
+        # total_records = query.with_entities(func.count(PnRaw.date_of_application)).scalar()
+        # print(total_records)
+
+        # Handle pagination
+        # data = query.offset((page - 1) * limit).limit(limit).all()
+        data=query.all()
+        # Format the response
+        aggregated_data = []
+        for row in data:
+            aggregated_data.append({
+                'date': row.date_of_application.strftime('%d-%m-%Y'),
+                'total_approved': float(row.total_approved)
+            })
+
+        response = {
+            # 'total_records': total_records,
+            # 'page': page,
+            # 'per_page': limit,
+            'data': aggregated_data
+        }
+
+        return jsonify(response), 200
+
+    except ValueError:
+        return jsonify({'error': 'Invalid input for limit or page'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
 @app.route('/api/pn', methods=['GET'])
 @jwt_required()
 @role_required(['admin', 'editor', 'viewer'])
 def get_pn():
     """
-    Get Paginated PnRaw Data
+    Get Payment Notice (PN) Data
     ---
     tags:
-      - PnRaw Data
+      - Payment Notice
     security:
       - JWT: []
     parameters:
@@ -437,14 +994,137 @@ def get_pn():
                     type: string
                   pn_date_issued_to_contractor:
                     type: string
-                  # Add other fields from PnRaw model here
+                  date_of_application:
+                    type: string
+                  # Add other properties from PnRaw model here
       401:
         description: Unauthorized - Invalid or missing token
       403:
         description: Forbidden - User does not have required role
     """
-    # Your existing function code here
-    ...
+
+    try:
+        filters = request.args.to_dict()
+
+        # Validate and set pagination parameters
+        limit = int(request.args.get('limit', 100))
+        page = int(request.args.get('page', 1))
+
+        query = PnRaw.query
+
+        # Apply filters dynamically
+        for key, value in filters.items():
+            if hasattr(PnRaw, key) and value:  # Check for non-empty values
+                query = query.filter(getattr(PnRaw, key) == value)
+
+        total_records = query.with_entities(func.count(PnRaw.unique_id)).scalar()
+        print(total_records)
+        data = query.offset((page - 1) * limit).limit(limit).all()
+
+        response = {
+            'total_records': total_records,
+            'page': page,
+            'per_page': limit,
+            'data': [item.to_dict() for item in data]
+        }
+
+        return jsonify(response), 200
+
+    except ValueError:
+        return jsonify({'error': 'Invalid input for limit or page'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
+
+@app.route('/api/subcontractor_rate', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_subcontractor_rates():
+    # Extract query parameters
+    filters = request.args.to_dict()
+
+    # Build the query dynamically
+    query = SubcontractorRate.query
+    for key, value in filters.items():
+        if hasattr(SubcontractorRate, key):
+            query = query.filter(getattr(SubcontractorRate, key) == value)
+
+    # Execute the query and get results
+    results = query.all()
+
+    # Convert results to dictionary
+    results_dict = [result.to_dict() for result in results]
+
+    return jsonify(results_dict), 200
+
+
+@app.route('/api/client_rate', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_client_rates():
+    # Extract query parameters
+    filters = request.args.to_dict()
+
+    # Build the query dynamically
+    query = ClientRate.query
+    for key, value in filters.items():
+        if hasattr(ClientRate, key):
+            query = query.filter(getattr(ClientRate, key) == value)
+
+    # Execute the query and get results
+    results = query.all()
+
+    # Convert results to dictionary
+    results_dict = [result.to_dict() for result in results]
+
+    return jsonify(results_dict), 200
+
+
+@app.route('/api/user_revenue', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_user_revenues():
+    # Extract query parameters
+    filters = request.args.to_dict()
+
+    # Build the query dynamically
+    query = UserRevenue.query
+    for key, value in filters.items():
+        if hasattr(UserRevenue, key):
+            query = query.filter(getattr(UserRevenue, key) == value)
+
+    # Execute the query and get results
+    results = query.all()
+
+    # Convert results to dictionary
+    results_dict = [result.to_dict() for result in results]
+
+    return jsonify(results_dict), 200    
+
+
+@app.route('/api/work_cat', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_work_cats():
+    # Extract query parameters
+    filters = request.args.to_dict()
+
+    # Build the query dynamically
+    query = WorkCat.query
+    for key, value in filters.items():
+        if hasattr(WorkCat, key):
+            query = query.filter(getattr(WorkCat, key) == value)
+
+    # Execute the query and get results
+    results = query.all()
+
+    # Convert results to dictionary
+    results_dict = [result.to_dict() for result in results]
+
+    return jsonify(results_dict), 200
+
 
 def send_reset_email(to_email, reset_token):
     
@@ -468,6 +1148,7 @@ def send_reset_email(to_email, reset_token):
 
     Best regards,
     Team Automation
+    gsb.automation@stl.tech
     '''
 
     # Create a MIMEText object and set up the email headers
@@ -489,8 +1170,10 @@ def send_reset_email(to_email, reset_token):
     except Exception as e:
         print(f'Failed to send email: {e}')
 
-
+# Update the forgot password API to use email_id
 @app.route('/api/forgot_password', methods=['POST'])
+@jwt_required()
+@role_required(['admin', 'editor'])
 def forgot_password():
     """
     Request Password Reset
@@ -535,10 +1218,29 @@ def forgot_password():
               type: string
               example: User not found
     """
-    # Your existing function code here
-    ...
+    data = request.json
+    email_id = data.get('email_id')
 
+    if not email_id:
+        return jsonify({'error': 'Email ID is required'}), 400
+
+    user = User.query.filter_by(email_id=email_id).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Generate a password reset token (you can use JWT or other methods)
+    reset_token = create_access_token(identity=email_id, expires_delta=timedelta(hours=1))
+
+    # Send the reset token via email
+    send_reset_email(email_id, reset_token)
+
+    return jsonify({'message': 'Password reset link has been sent'}), 200
+
+
+# Update the reset password API to use email_id
 @app.route('/api/reset_password', methods=['POST'])
+@jwt_required()
+@role_required(['admin', 'editor'])
 def reset_password():
     """
     Reset User Password
@@ -587,8 +1289,30 @@ def reset_password():
               type: string
               example: User not found
     """
-    # Your existing function code here
-    ...
+    data = request.json
+    reset_token = data.get('reset_token')
+    new_password = data.get('new_password')
+    print(reset_token)
+
+    if not reset_token or not new_password:
+        return jsonify({'error': 'Reset token and new password are required'}), 400
+
+    try:
+        # Decode the reset token to get the email_id
+        email_id = jwt.decode_token(reset_token)['identity']
+    except Exception as e:
+        return jsonify({'error': 'Invalid or expired token'}), 400
+
+    user = User.query.filter_by(email_id=email_id).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
+    user.password = hashed_password
+    print("Password reset done")
+    db.session.commit()
+
+    return jsonify({'message': 'Password reset successfully'}), 200
 
 
 @app.route('/api/add_subcontractor_rates', methods=['POST'])
@@ -644,6 +1368,72 @@ def add_subcontractor_rates():
 @jwt_required()
 @role_required(['admin'])
 def add_user_revenues():
+    """
+    Add User Revenues
+    ---
+    tags:
+      - User Revenue
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              user_name:
+                type: string
+                description: Username of the revenue-generating user.
+                example: johndoe
+              revenue_generating_entity:
+                type: string
+                description: Entity generating the revenue.
+                example: Acme Corp
+            required:
+              - user_name
+              - revenue_generating_entity
+    responses:
+      201:
+        description: Successfully added user revenues.
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              entry:
+                type: object
+                description: Original entry from the input.
+              success:
+                type: boolean
+                description: Whether the entry was successfully processed.
+              error:
+                type: string
+                description: Error message if the entry was not successful.
+                nullable: true
+            example:
+              - entry:
+                  user_name: johndoe
+                  revenue_generating_entity: Acme Corp
+                success: true
+              - entry:
+                  user_name: 
+                  revenue_generating_entity: Acme Corp
+                success: false
+                error: Missing user_name
+      400:
+        description: Bad request - Input data should be a list of entries.
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: Input data should be a list of entries
+    security:
+      - BearerAuth: []
+    """
+
+
     data = request.get_json()
     
     if not isinstance(data, list):
@@ -674,25 +1464,146 @@ def add_user_revenues():
 
     return jsonify(results), 201 
 
-# API Endpoints
 @app.route('/api/login', methods=['POST'])
 def login():
-    username = request.json.get('username', None)
-    password = request.json.get('password', None)
-    user = User.query.filter_by(username=username).first()
-    if user and bcrypt.check_password_hash(user.password, password):
-        access_token = create_access_token(identity=username)
-        return jsonify(access_token=access_token, role=user.role, can_edit=user.can_edit), 200
-    return jsonify({"msg": "Bad username or password"}), 401
+    """
+    User Login
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            email_id:
+              type: string
+            password:
+              type: string
+    responses:
+      200:
+        description: Login successful
+        schema:
+          type: object
+          properties:
+            access_token:
+              type: string
+            role:
+              type: string
+            can_edit:
+              type: boolean
+            id:
+              type: integer
+      400:
+        description: Missing or invalid data
+      401:
+        description: Invalid username or password
+    """
+    # Parse the request JSON
+    data = request.get_json()
 
+    # Check if required fields are present
+    if not data or not data.get('email_id') or not data.get('password'):
+        return jsonify({"msg": "Missing email_id or password"}), 400
+
+    email_id = data.get('email_id').strip().lower() if data.get('email_id') else None
+    password = data.get('password').strip() if data.get('password') else None
+
+    # Validate fields are not empty after trimming
+    if not email_id or not password:
+        return jsonify({"msg": "email_id or password cannot be empty"}), 400
+
+    # Query the user from the database
+    user = User.query.filter_by(email_id=email_id).first()
+
+    if user and bcrypt.check_password_hash(user.password, password):
+        # Create access token (assuming Flask-JWT-Extended is used)
+        access_token = create_access_token(identity=user.email_id)
+
+        return jsonify(
+            access_token=access_token,
+            role=user.role,
+            can_edit=user.can_edit,
+            id=user.id
+        ), 200
+
+    # Invalid credentials
+    return jsonify({"msg": "Invalid email_id or password"}), 401
 
 @app.route('/api/data', methods=['GET'])
 @jwt_required()
 @role_required(['admin', 'editor', 'viewer'])
 def get_data():
+    """
+    Retrieve data
+    ---
+    tags:
+      - Data
+    security:
+      - JWT: []
+    parameters:
+      - name: limit
+        in: query
+        type: integer
+        default: 1000
+      - name: page
+        in: query
+        type: integer
+        default: 1
+      - name: start_date
+        in: query
+        type: string
+        format: date
+      - name: end_date
+        in: query
+        type: string
+        format: date
+      - name: User_Name
+        in: query
+        type: string
+      - name: Area
+        in: query
+        type: array
+        items:
+          type: string
+    responses:
+      200:
+        description: Successful response
+        schema:
+          type: object
+          properties:
+            total_records:
+              type: integer
+            page:
+              type: integer
+            per_page:
+              type: integer
+            data:
+              type: array
+              items:
+                type: object
+                properties:
+                  User_Name:
+                    type: string
+                  Date:
+                    type: string
+                    format: date
+                  revenue_generating_entity:
+                    type: string
+                  category:
+                    type: string
+                  Area:
+                    type: string
+      401:
+        description: Unauthorized
+      403:
+        description: Forbidden
+    """
     filters = request.args.to_dict()
 
-    limit = int(request.args.get('limit', 100))  # Default to 100 rows
+    limit = int(request.args.get('limit', 1000))  # Default to 1000 rows
     page = int(request.args.get('page', 1))  # Default to page 1
 
     query = EODDump.query.outerjoin(
@@ -703,19 +1614,23 @@ def get_data():
         EODDump.Item_Mst_ID == WorkCat.Rate_Code
     )
 
-        # Handle date range
+    # Handle date range
     start_date = filters.get('start_date')
-    print(start_date)
     end_date = filters.get('end_date')
-    print(end_date)
+    
     if start_date and end_date:
-        start_date = datetime.strptime(start_date, '%d-%m-%y').date()
-        end_date = datetime.strptime(end_date, '%d-%m-%y').date()
+        start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+        end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
         query = query.filter(EODDump.Date.between(start_date, end_date))
 
+    # Handle area and other comma-separated columns
     for key, value in filters.items():
         if hasattr(EODDump, key):
-            query = query.filter(getattr(EODDump, key) == value)
+            if ',' in value:  # Check if there are multiple values separated by commas
+                value_list = value.split(',')
+                query = query.filter(getattr(EODDump, key).in_(value_list))
+            else:
+                query = query.filter(getattr(EODDump, key) == value)
 
     total_records = query.with_entities(func.count()).scalar()
     data = query.offset((page - 1) * limit).limit(limit).all()
@@ -726,14 +1641,8 @@ def get_data():
         user_revenue = item.user_revenue
         work_cat = item.work_cat
 
-        if user_revenue:
-            item_dict['revenue_generating_entity'] = user_revenue.revenue_generating_entity
-        else:
-            item_dict['revenue_generating_entity'] = None
-        if work_cat:
-            item_dict['category'] = work_cat.Category
-        else:
-            item_dict['category'] = None    
+        item_dict['revenue_generating_entity'] = user_revenue.revenue_generating_entity if user_revenue else None
+        item_dict['category'] = work_cat.Category if work_cat else None    
 
         response_data.append(item_dict)
 
@@ -755,7 +1664,7 @@ def get_revenue_data():
     try:
         filters = request.args.to_dict()
 
-        limit = int(request.args.get('limit', 100))  # Default to 100 rows
+        limit = int(request.args.get('limit', 1000))  # Default to 1000 rows
         page = int(request.args.get('page', 1))  # Default to page 1
 
         query = EODDump.query.outerjoin(
@@ -769,9 +1678,23 @@ def get_revenue_data():
             EODDump.Item_Mst_ID == ClientRate.rate_code
         )
 
+        # Handle date range
+        start_date = filters.get('start_date')
+        end_date = filters.get('end_date')
+
+        if start_date and end_date:
+            start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+            end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
+            query = query.filter(EODDump.Date.between(start_date, end_date))
+
+        # Handle area and other comma-separated columns
         for key, value in filters.items():
             if hasattr(EODDump, key):
-                query = query.filter(getattr(EODDump, key) == value)
+                if ',' in value:  # Check if there are multiple values separated by commas
+                    value_list = value.split(',')
+                    query = query.filter(getattr(EODDump, key).in_(value_list))
+                else:
+                    query = query.filter(getattr(EODDump, key) == value)
 
         total_records = query.with_entities(func.count()).scalar()
         data = query.offset((page - 1) * limit).limit(limit).all()
@@ -782,16 +1705,8 @@ def get_revenue_data():
             user_revenue = item.user_revenue
             work_cat = item.work_cat
 
-            if user_revenue:
-                item_dict['revenue_generating_entity'] = user_revenue.revenue_generating_entity
-            else:
-                item_dict['revenue_generating_entity'] = None
-            if work_cat:
-                item_dict['category'] = work_cat.Category
-            else:
-                item_dict['category'] = None    
-
-            response_data.append(item_dict)
+            item_dict['revenue_generating_entity'] = user_revenue.revenue_generating_entity if user_revenue else None
+            item_dict['category'] = work_cat.Category if work_cat else None
 
             # Calculate revenue
             revenue = db.session.query(
@@ -807,7 +1722,6 @@ def get_revenue_data():
             item_dict.update(cost_data)
             
             response_data.append(item_dict)
-            
 
         response = {
             'total_records': total_records,
@@ -820,6 +1734,499 @@ def get_revenue_data():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/data/aggregated_revenue', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_aggregated_revenue_data():
+    try:
+        filters = request.args.to_dict()
+
+        # Handle date range
+        start_date = filters.get('start_date')
+        end_date = filters.get('end_date')
+
+        if start_date and end_date:
+            start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+            end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
+        else:
+            # Default to last 30 days if no date range is provided
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=30)
+
+        query = db.session.query(
+            EODDump.Date,
+            EODDump.Approved_Status,
+            UserRevenue.revenue_generating_entity,
+            func.sum(EODDump.Qty * ClientRate.rates).label('revenue'),
+        ).join(
+            UserRevenue,
+            func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)       
+        ).join(
+            ClientRate,
+            EODDump.Item_Mst_ID == ClientRate.rate_code
+        ).filter(
+            EODDump.Date.between(start_date, end_date)
+        ).group_by(
+            EODDump.Date,
+            EODDump.Approved_Status,
+            UserRevenue.revenue_generating_entity
+        )
+
+        # Apply additional filters
+        for key, value in filters.items():
+            if key not in ['start_date', 'end_date'] and hasattr(EODDump, key):
+                query = query.filter(getattr(EODDump, key) == value)
+
+        result = query.all()
+
+        aggregated_data = []
+        for row in result:
+            # Categorize the approved_status
+            if row.Approved_Status.lower() in ['approved']:
+                status_category = 'approved'
+            elif row.Approved_Status.lower() in ['rejected']:
+                status_category = 'rejected'
+            else:
+                status_category = 'risk'
+
+            aggregated_data.append({
+                'date': row.Date.strftime('%d-%m-%Y'),
+                'approved_status': status_category,
+                'revenue_generating_entity': row.revenue_generating_entity,
+                'revenue': float(row.revenue),
+            })
+
+        response = {
+            'total_records': len(aggregated_data),
+            'data': aggregated_data
+        }
+
+        return jsonify(response)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+# @app.route('/api/data/sum_revenue', methods=['GET'])
+# @jwt_required()
+# @role_required(['admin', 'editor', 'viewer'])
+# def get_sum_revenue_data():
+#     try:
+#         filters = request.args.to_dict()
+
+#         # Handle date range
+#         start_date = filters.get('start_date')
+#         end_date = filters.get('end_date')
+
+#         if start_date and end_date:
+#             start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+#             end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
+#         else:
+#             # Default to last 30 days if no date range is provided
+#             end_date = datetime.now().date()
+#             start_date = end_date - timedelta(days=30)
+
+#         query = db.session.query(
+#             EODDump.Date,
+#             func.sum(EODDump.Qty * ClientRate.rates).label('revenue'),
+            
+#         ).join(
+#             UserRevenue,
+#             func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)       
+#         ).join(
+#             ClientRate,
+#             EODDump.Item_Mst_ID == ClientRate.rate_code
+#         ).filter(
+#             EODDump.Date.between(start_date, end_date)
+#         ).group_by(
+#             EODDump.Date       
+#              )
+
+#         # Apply additional filters
+#         for key, value in filters.items():
+#             if key not in ['start_date', 'end_date'] and hasattr(EODDump, key):
+#                 query = query.filter(getattr(EODDump, key) == value)
+
+#         result = query.all()
+
+#         # aggregated_data = []
+#         # ************
+#         aggregated_data = []
+#         for row in result:
+#             # Categorize the approved_status
+#             if row.Approved_Status.lower() in ['approved']:
+#                 status_category = 'approved'
+#             elif row.Approved_Status.lower() in ['rejected']:
+#                 status_category = 'rejected'
+#             else:
+#                 status_category = 'risk'
+
+#             aggregated_data.append({
+#                 'date': row.Date.strftime('%d-%m-%Y'),
+#                 'approved_status': status_category,
+#                 'revenue_generating_entity': row.revenue_generating_entity,
+#                 'revenue': float(row.revenue),
+#             })
+
+#         response = {
+#             'total_records': len(aggregated_data),
+#             'data': aggregated_data
+#         }
+#         # ************
+#         # for row in result:
+#         #     aggregated_data.append({
+#         #         'date': row.Date.strftime('%d-%m-%Y'),
+#         #         'revenue': float(row.revenue),
+#         #     })
+
+#         # response = {
+#         #     'total_records': len(aggregated_data),
+#         #     'data': aggregated_data
+#         # }
+
+#         return jsonify(response)
+
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/data/sum_revenue', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_sum_revenue_data():
+    try:
+        filters = request.args.to_dict()
+
+        # Handle date range
+        start_date = filters.get('start_date')
+        end_date = filters.get('end_date')
+
+        if start_date and end_date:
+            start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+            end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
+        else:
+            # Default to last 30 days if no date range is provided
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=30)
+
+        query = db.session.query(
+            EODDump.Date,
+            func.sum(EODDump.Qty * ClientRate.rates).label('revenue'),
+            EODDump.Approved_Status
+        ).join(
+            UserRevenue,
+            func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)       
+        ).join(
+            ClientRate,
+            EODDump.Item_Mst_ID == ClientRate.rate_code
+        ).filter(
+            EODDump.Date.between(start_date, end_date)
+        ).group_by(
+            EODDump.Date,
+            EODDump.Approved_Status
+        )
+
+        # Apply additional filters
+        for key, value in filters.items():
+            if key not in ['start_date', 'end_date', 'approved_status'] and hasattr(EODDump, key):
+                query = query.filter(getattr(EODDump, key) == value)
+
+        if 'approved_status' in filters:
+            approved_status_filter = filters['approved_status'].lower()
+            if approved_status_filter in ['approved', 'rejected']:
+                query = query.filter(func.lower(EODDump.Approved_Status) == approved_status_filter)
+            else:
+                query = query.filter(~EODDump.Approved_Status.in_(['approved', 'rejected']))
+
+        result = query.all()
+
+        # Aggregate the data
+        aggregated_data = []
+        for row in result:
+            # Categorize the approved_status
+            if row.Approved_Status.lower() == 'approved':
+                status_category = 'approved'
+            elif row.Approved_Status.lower() == 'rejected':
+                status_category = 'rejected'
+            else:
+                status_category = 'risk'
+
+            aggregated_data.append({
+                'date': row.Date.strftime('%d-%m-%Y'),
+                'approved_status': status_category,
+                'revenue': float(row.revenue),
+            })
+
+        response = {
+            'total_records': len(aggregated_data),
+            'data': aggregated_data
+        }
+
+        return jsonify(response)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+@app.route('/api/data/sum_cost', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def get_sum_cost_data():
+    try:
+        filters = request.args.to_dict()
+
+        # Handle date range
+        start_date = filters.get('start_date')
+        end_date = filters.get('end_date')
+
+        if start_date and end_date:
+            start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
+            end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
+        else:
+            # Default to last 30 days if no date range is provided
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=30)
+
+        query = db.session.query(
+            EODDump.Date,
+            func.sum(EODDump.Qty * SubcontractorRate.afs).label('cost_afs'),
+            func.sum(EODDump.Qty * SubcontractorRate.bk_comms).label('cost_bk_comms'),
+            func.sum(EODDump.Qty * SubcontractorRate.ccg).label('cost_ccg'),
+            func.sum(EODDump.Qty * SubcontractorRate.jk_comms).label('cost_jk_comms'),
+            func.sum(EODDump.Qty * SubcontractorRate.jdc).label('cost_jdc'),
+            func.sum(EODDump.Qty * SubcontractorRate.jto).label('cost_jto'),
+            func.sum(EODDump.Qty * SubcontractorRate.nola).label('cost_nola'),
+            func.sum(EODDump.Qty * SubcontractorRate.rollo).label('cost_rollo'),
+            func.sum(EODDump.Qty * SubcontractorRate.salcs).label('cost_salcs'),
+            func.sum(EODDump.Qty * SubcontractorRate.upscale).label('cost_upscale'),
+            func.sum(EODDump.Qty * SubcontractorRate.vsl).label('cost_vsl'),
+            func.sum(EODDump.Qty * SubcontractorRate.vus).label('cost_vus'),
+            func.sum(EODDump.Qty * SubcontractorRate.set).label('cost_set')
+            
+        ).join(
+            WorkCat,
+            func.lower(WorkCat.Rate_Code) == func.lower(EODDump.Item_Mst_ID)       
+        ).join(
+            SubcontractorRate,
+            EODDump.Item_Mst_ID == SubcontractorRate.rate_code
+        ).filter(
+            EODDump.Date.between(start_date, end_date)
+        ).group_by(
+            EODDump.Date       
+             )
+
+
+        # Apply the 'Category' filter from the WorkCat table
+        if 'Category' in filters:
+            category_value = filters.get('Category')
+            query = query.filter(WorkCat.Category == category_value)
+
+        # Apply additional filters
+        for key, value in filters.items():
+            if key not in ['start_date', 'end_date'] and hasattr(EODDump, key):
+                query = query.filter(getattr(EODDump, key) == value)
+
+        result = query.all()
+
+        aggregated_data = []
+        for row in result:
+            costs = [
+                {'tag': 'afs', 'cost': float(row.cost_afs)},
+                {'tag': 'bk_comms', 'cost': float(row.cost_bk_comms)},
+                {'tag': 'ccg', 'cost': float(row.cost_ccg)},
+                {'tag': 'jk_comms', 'cost': float(row.cost_jk_comms)},
+                {'tag': 'jdc', 'cost': float(row.cost_jdc)},
+                {'tag': 'jto', 'cost': float(row.cost_jto)},
+                {'tag': 'nola', 'cost': float(row.cost_nola)},
+                {'tag': 'rollo', 'cost': float(row.cost_rollo)},
+                {'tag': 'salcs', 'cost': float(row.cost_salcs)},
+                {'tag': 'upscale', 'cost': float(row.cost_upscale)},
+                {'tag': 'vsl', 'cost': float(row.cost_vsl)},
+                {'tag': 'vus', 'cost': float(row.cost_vus)},
+                {'tag': 'set', 'cost': float(row.cost_set)}
+            ]
+            
+            total_cost = sum(cost['cost'] for cost in costs)
+
+            aggregated_data.append({
+                'date': row.Date.strftime('%d-%m-%Y'),
+                'costs': costs,
+                'total_cost': total_cost
+            })
+
+        response = {
+            'total_records': len(aggregated_data),
+            'data': aggregated_data
+        }
+
+        return jsonify(response)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
+
+@app.route('/dashboard_data')
+@jwt_required()
+@role_required(['admin', 'editor'])
+def dashboard_data():
+    # Get all months with invoice data
+    invoice_months = db.session.query(
+        func.date_format(PnRaw.date_of_application, '%Y-%m').label('month'),
+        func.sum(PnRaw.approved_total).label('total_invoice')
+    ).group_by('month').all()
+
+    result = []
+
+    for invoice_month, total_invoice in invoice_months:
+        month_data = {
+            'month': invoice_month,
+            'total_invoice': float(total_invoice),
+            'total_revenue': 0,  # Initialize total_revenue
+            'revenue_breakup': []
+        }
+
+        # Get revenue breakup for each month
+        start_date = datetime.strptime(invoice_month, '%Y-%m')
+        end_date = datetime(start_date.year, start_date.month, calendar.monthrange(start_date.year, start_date.month)[1])
+
+        revenue_breakup = db.session.query(
+            func.date_format(EODDump.Date, '%Y-%m').label('revenue_month'),
+            func.sum(EODDump.Qty * ClientRate.rates).label('revenue')
+        ).join(
+            UserRevenue,
+            func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)
+        ).join(
+            ClientRate,
+            EODDump.Item_Mst_ID == ClientRate.rate_code
+        ).join(
+            PnRaw,
+            PnRaw.seed == EODDump.Seed
+        ).filter(
+            PnRaw.date_of_application.between(start_date, end_date)
+        ).group_by(
+            'revenue_month'
+        ).all()
+
+        for revenue_month, revenue in revenue_breakup:
+            month_data['revenue_breakup'].append({
+                'month': revenue_month,
+                'revenue': float(revenue)
+            })
+            month_data['total_revenue'] += float(revenue)  # Add to total_revenue
+
+        result.append(month_data)
+
+    return jsonify(result)
+
+
+
+
+@app.route('/dashboard_data1', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor'])
+def dashboard_data1():
+    try:
+        today = datetime.now()
+        six_months_ago = today - timedelta(days=180)
+
+        last_6_months_data = db.session.query(
+            func.date_format(PnRaw.date_of_application, '%Y-%m').label('month'),
+            func.sum(PnRaw.approved_total).label('total_invoice')
+        ).filter(
+            PnRaw.date_of_application >= six_months_ago
+        ).group_by('month').all()
+
+        older_months_data = db.session.query(
+            func.date_format(PnRaw.date_of_application, '%Y-%m').label('month'),
+            func.sum(PnRaw.approved_total).label('total_invoice')
+        ).filter(
+            PnRaw.date_of_application < six_months_ago
+        ).group_by('month').all()
+
+        def get_revenue_breakup(months_data):
+            result = []
+            aggregated_total_revenue=0
+            aggregated_total_invoice=0
+
+            for invoice_month, total_invoice in months_data:
+                aggregated_revenue_old = 0
+                aggregated_total_invoice += float(total_invoice)
+                month_data = {
+                    'month': invoice_month,
+                    'total_invoice': float(total_invoice),
+                    'total_revenue': 0,
+                    'revenue_breakup': []
+                }
+
+                start_date = datetime.strptime(invoice_month, '%Y-%m')
+                end_date = datetime(start_date.year, start_date.month, calendar.monthrange(start_date.year, start_date.month)[1])
+
+                revenue_breakup = db.session.query(
+                    func.date_format(EODDump.Date, '%Y-%m').label('revenue_month'),
+                    func.sum(EODDump.Qty * ClientRate.rates).label('revenue')
+                ).join(
+                    UserRevenue,
+                    func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)
+                ).join(
+                    ClientRate,
+                    EODDump.Item_Mst_ID == ClientRate.rate_code
+                ).join(
+                    PnRaw,
+                    PnRaw.seed == EODDump.Seed
+                ).filter(
+                    PnRaw.date_of_application.between(start_date, end_date)
+                ).group_by(
+                    'revenue_month'
+                ).all()
+
+                for revenue_month, revenue in revenue_breakup:
+                    revenue = float(revenue)
+                    if datetime.strptime(revenue_month, '%Y-%m') >= six_months_ago:
+                        month_data['revenue_breakup'].append({
+                            'month': revenue_month,
+                            'revenue': revenue
+                        })
+                    else:
+                        aggregated_revenue_old += revenue
+                    month_data['total_revenue'] += revenue
+                    aggregated_total_revenue += revenue
+
+                month_data['revenue_breakup'].append({
+                    'month': 'aggregated_revenue_old',
+                    'revenue': aggregated_revenue_old
+                })
+                aggregated_revenue_old = 0
+                result.append(month_data)
+
+            result.append({
+              'aggregated_total_revenue' : aggregated_total_revenue,
+              'aggregated_total_invoice' : aggregated_total_invoice
+            })    
+            return result
+
+        last_6_months_result = get_revenue_breakup(last_6_months_data)
+        older_months_result = get_revenue_breakup(older_months_data)
+
+        response = {
+            'last_6_months': last_6_months_result,
+            'older_months': older_months_result
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 
@@ -886,6 +2293,7 @@ def update_user(id):
 # Delete a user
 @app.route('/api/users/<int:id>', methods=['DELETE'])
 @jwt_required()
+@role_required(['admin', 'editor'])
 def delete_user(id):
     user = User.query.get(id)
     if not user:
@@ -919,7 +2327,7 @@ def get_users():
 @role_required(['admin', 'editor'])
 def update_revenue_status():
     data = request.json
-    user = User.query.filter_by(username=get_jwt_identity()).first()
+    user = User.query.filter_by(email_id=get_jwt_identity()).first()
 
     if not user.can_edit:
         return jsonify({"success": False, "message": "You don't have edit rights"}), 403
@@ -938,140 +2346,93 @@ def update_revenue_status():
 
 
 
-# @app.route('/api/get_revenue', methods=['POST'])
-# @jwt_required()
-# @role_required(['admin', 'viewer', 'editor'])
-# def get_revenue():
-#     user = User.query.filter_by(username=get_jwt_identity()).first()
-#     print(user)
-
-#     data = request.json
-#     print("Received data:", data)  # Debug statement
-#     seeds = data.get('Seeds')
-    
-#     if not seeds or not isinstance(seeds, list):
-#         return jsonify({"success": False, "message": "Seeds parameter is required and must be a list"}), 400
-    
-#     try:
-#         revenue_results = {}
-#         for seed in seeds:
-#             total_revenue = db.session.query(
-#                 db.func.sum(EODDump.Qty * ClientRate.rates)
-#             ).join(
-#                 ClientRate, EODDump.Item_Mst_ID == ClientRate.rate_code
-#             ).filter(
-#                 EODDump.Seed == seed
-#             ).scalar()
-            
-#             revenue_results[seed] = total_revenue if total_revenue is not None else 0
-        
-#         return jsonify({"success": True, "revenue": revenue_results})
-        
-#     except Exception as e:
-#         return jsonify({"success": False, "message": str(e)}), 500
-
-
-
-
-
-
-# @app.route('/api/calculate_cost', methods=['POST'])
-# @jwt_required()
-# @role_required(['admin', 'editor'])
-# def calculate_cost():
-#     data = request.json
-#     if not data or 'seeds' not in data:
-#         return jsonify({"error": "Invalid input. 'seeds' is required."}), 400
-
-#     seeds = data['seeds']
-    
-#     ooh_rates = SubcontractorRate.query.filter_by(rate_code='OOH001').first()
-    
-#     results = []
-#     for seed in seeds:
-#         eod_item = EODDump.query.filter_by(Seed=seed).first()
-#         if not eod_item:
-#             results.append({"seed": seed, "error": "EOD item not found"})
-#             continue
-
-#         # Get revenue_generating_entity from user_revenue table
-#         user_rev = UserRevenue.query.filter(func.lower(UserRevenue.user_name) == func.lower(eod_item.User_Name)).first()
-#         if not user_rev:
-#             results.append({
-#                 "seed": seed,
-#                 "error": f"User {eod_item.User_Name} not found in UserRevenue table"
-#             })
-#             continue
-        
-#         revenue_generating_entity = user_rev.revenue_generating_entity
-
-#         # If revenue_generating_entity is "SET", cost is 0
-#         if revenue_generating_entity.upper() == "SET":
-#             results.append({
-#                 "seed": seed,
-#                 "date": eod_item.Date.strftime('%Y-%m-%d') if eod_item.Date else None,
-#                 "item_mst_id": eod_item.Item_Mst_ID,
-#                 "qty": eod_item.Qty,
-#                 "username": eod_item.User_Name,
-#                 "revenue_generating_entity": revenue_generating_entity,
-#                 "rate": 0,
-#                 "cost": 0,
-#                 "is_weekend": False,
-#                 "weekend_rate": 0
-#             })
-#             continue
-
-#         # Get rate from subcontractor_rate table
-#         subcontractor_rate = SubcontractorRate.query.filter_by(rate_code=eod_item.Item_Mst_ID).first()
-#         if not subcontractor_rate:
-#             results.append({
-#                 "seed": seed,
-#                 "error": f"Rate not found for Item_Mst_ID: {eod_item.Item_Mst_ID}"
-#             })
-#             continue
-        
-#         # Get the rate for the specific revenue_generating_entity
-#         rate = getattr(subcontractor_rate, revenue_generating_entity.lower(), None)
-#         if rate is None:
-#             results.append({
-#                 "seed": seed,
-#                 "error": f"Rate not found for entity: {revenue_generating_entity}"
-#             })
-#             continue
-        
-#         # Calculate base cost
-#         base_cost = float(eod_item.Qty) * float(rate)
-        
-#         # Check if the date is a weekend
-#         is_weekend = False
-#         weekend_rate = 0
-#         if eod_item.Date:
-#             if eod_item.Date.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-#                 is_weekend = True
-#                 weekend_rate = getattr(ooh_rates, revenue_generating_entity.lower(), 0)
-#                 if weekend_rate:
-#                     base_cost *= (1 + float(weekend_rate) / 100)  # Increase by percentage
-
-#         results.append({
-#             "seed": seed,
-#             "date": eod_item.Date.strftime('%Y-%m-%d') if eod_item.Date else None,
-#             "item_mst_id": eod_item.Item_Mst_ID,
-#             "qty": eod_item.Qty,
-#             "username": eod_item.User_Name,
-#             "revenue_generating_entity": revenue_generating_entity,
-#             "rate": float(rate),
-#             "cost": base_cost,
-#             "is_weekend": is_weekend,
-#             "weekend_rate": float(weekend_rate) if weekend_rate else 0
-#         })
-    
-#     return jsonify(results)
 
 
 @app.route('/api/upload', methods=['POST'])
 @jwt_required()
 @role_required(['admin', 'editor'])
 def upload_file():
+    
+    """
+    Upload Payment Notice Excel File
+    ---
+    tags:
+      - File Upload
+    security:
+      - JWT: []
+    consumes:
+      - multipart/form-data
+    parameters:
+      - name: file
+        in: formData
+        type: file
+        required: true
+        description: Excel file containing Payment Notice data
+    responses:
+      200:
+        description: File uploaded and data stored/updated successfully
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              example: File uploaded and data stored/updated successfully
+      400:
+        description: Bad request - No file or no selected file
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: No file part
+      401:
+        description: Unauthorized - Invalid or missing token
+      403:
+        description: Forbidden - User does not have required role
+      500:
+        description: Internal server error
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: An error occurred while processing the file
+    
+    """
+    column_mapping = {
+        "Unique ID": "unique_id",
+        "Payment Notice ID": "payment_notice_id",
+        "Contractor AFP ref": "contractor_afp_ref",
+        "PN date Issued to Contractor": "pn_date_issued_to_contractor",
+        "Date of Application": "date_of_application",
+        "Purchase Order ID": "purchase_order_id",
+        "Region": "region",
+        "Exchange ID": "exchange_id",
+        "Town": "town",
+        "Contractor": "contractor",
+        "Polygon Type": "polygon_type",
+        "Polygon ID": "polygon_id",
+        "Feature ID": "feature_id",
+        "Build Status": "build_status",
+        "code": "code",
+        "item": "item",
+        "unit": "unit",
+        "price": "price",
+        "quantity": "quantity",
+        "total": "total",
+        "Comments": "comments",
+        "AfP Claim OK / NOK": "afp_claim_ok_nok",
+        "NOK Reason Code": "nok_reason_code",
+        "Approved Quantity": "approved_quantity",
+        "Approved Total": "approved_total",
+        "CONCATE": "concate",
+        "QGIS Quant": "qgis_quant",
+        "QGIS Rate": "qgis_rate",
+        "QGIS URL": "qgis_url",
+        "PO Check": "po_check",
+        "Comment": "comment"
+    }
+
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
 
@@ -1082,14 +2443,33 @@ def upload_file():
 
     try:
         # Read the Excel file into a DataFrame
-        df = pd.read_excel(file,skiprows=5,usecols=lambda x: x not in [0])
+        df = pd.read_excel(file, skiprows=5, usecols="B:AF")
+        df = df.replace({np.nan: None})
 
-        # Store DataFrame in the database
-        df.to_sql('pn_raw', engine, index=False, if_exists='append')
+        df.rename(columns=column_mapping, inplace=True)
+        count=df.shape[0]
 
-        return jsonify({'message': 'File uploaded and data stored successfully'}), 200
+        # Loop through the DataFrame and upsert (update or insert) each row
+        for index, row in df.iterrows():
+            unique_id = row['unique_id']
+            existing_entry = db.session.query(PnRaw).filter_by(unique_id=unique_id).first()
+            
+            if existing_entry:
+                # Update the existing entry
+                for key, value in row.items():
+                    setattr(existing_entry, key, value)
+                db.session.commit()
+            else:
+                # Insert new entry
+                new_entry = PnRaw(**row)
+                db.session.add(new_entry)
+                db.session.commit()
+
+        return jsonify({'message': f'File uploaded and data stored/updated successfully, inserted {count} rows'}), 200
     except Exception as e:
+        db.session.rollback()  # Rollback in case of any error
         return jsonify({'error': str(e)}), 500
+
 
 
 @app.route('/api/unique_values', methods=['GET'])
@@ -1124,12 +2504,12 @@ def get_unique_values():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-        if not User.query.filter_by(username='admin').first():
+        if not User.query.filter_by(email_id='admin@gmail.com').first():
             admin = User(username='admin', password=bcrypt.generate_password_hash('adminpass').decode('utf-8'), role='admin', can_edit=True)
             editor = User(username='editor', password=bcrypt.generate_password_hash('editorpass').decode('utf-8'), role='editor', can_edit=True)
             viewer = User(username='viewer', password=bcrypt.generate_password_hash('viewerpass').decode('utf-8'), role='viewer', can_edit=False)
             db.session.add_all([admin, editor, viewer])
             db.session.commit()
-    app.run(host='0.0.0.0', port=5000,debug=True)
+    app.run(host='0.0.0.0', port=5001,debug=True)
 
 
