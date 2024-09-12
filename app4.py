@@ -25,437 +25,24 @@ from flasgger import Swagger
 import calendar
 from email_validator import validate_email, EmailNotValidError
 from validate_email_address import validate_email as validate_existence
+from cachetools import TTLCache
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
+from flask_jwt_extended import decode_token
 
 
-
-db_user = os.getenv('DB_USER')
-db_password = os.getenv('DB_PASSWORD')
-db_host = os.getenv('DB_HOST')
-db_name = os.getenv('DB_NAME')
-app = Flask(__name__)
-
-app.config['SQLALCHEMY_DATABASE_URI'] = "mysql+mysqldb://root:Admin%40123@10.100.130.76/eod"
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', '1234567890') # Change this!
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
-
-db = SQLAlchemy(app)
-
-
-
-app.config['SWAGGER'] = {
-    'title': 'Flask UK',
-    'uiversion': 3,
-    'version': '1.0',
-    'description': 'List of All APIs with documentation',
-    'termsOfService': 'http://example.com/terms',
-    'contact': {
-        'name': 'Flask UK',
-        'url': 'https://stl.tech',
-        'email': 'automation.gsb@stl.tech'
-    },
-    'license': {
-        'name': 'Apache 2.0',
-        'url': 'https://www.apache.org/licenses/LICENSE-2.0.html'
-    }
-}
-swagger = Swagger(app)
+from conf import app, db, engine, swagger, bcrypt, jwt, migrate, swagger
+from flask import Blueprint
+from utils import role_required
+from helper_func import *
+from models import *
 
 
 CORS(app)
-# swagger = Swagger(app)
 
 
 
 
-
-bcrypt = Bcrypt(app)
-jwt = JWTManager(app)
-migrate = Migrate(app, db)
-
-
-engine = create_engine(app.config['SQLALCHEMY_DATABASE_URI'])
-
-
-
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), nullable=False)
-    password = db.Column(db.String(120), nullable=False)
-    email_id = db.Column(db.String(120), unique=True, nullable=False)
-    phone_no = db.Column(db.String(20), nullable=True)
-    role = db.Column(db.String(20), nullable=False)
-    can_edit = db.Column(db.Boolean, default=False)
-    # name = db.Column(db.String(100), default=False)
-    def to_dict(self):
-        return {column.name: getattr(self, column.name) for column in self.__table__.columns}
-
-
-class PnRaw(db.Model):
-    __tablename__ = 'pn_raw'
-    unique_id = db.Column(db.String(100), primary_key=True)
-    payment_notice_id = db.Column(db.String(100))
-    contractor_afp_ref = db.Column(db.String(100))
-    pn_date_issued_to_contractor = db.Column(db.Date)
-    date_of_application = db.Column(db.Date)
-    purchase_order_id = db.Column(db.String(100))
-    region = db.Column(db.String(100))
-    exchange_id = db.Column(db.String(100))
-    town = db.Column(db.String(100))
-    contractor = db.Column(db.String(100))
-    polygon_type = db.Column(db.String(100))
-    polygon_id = db.Column(db.String(100))
-    feature_id = db.Column(db.String(100))
-    build_status = db.Column(db.String(100))
-    code = db.Column(db.String(100))
-    item = db.Column(db.String(255))
-    unit = db.Column(db.String(100))
-    price = db.Column(db.DECIMAL(10, 5))
-    quantity = db.Column(db.DECIMAL(10, 5))
-    total = db.Column(db.DECIMAL(10, 2))
-    comments = db.Column(db.String(255))
-    afp_claim_ok_nok = db.Column(db.String(100))
-    nok_reason_code = db.Column(db.String(100))
-    approved_quantity = db.Column(db.DECIMAL(10, 5))
-    approved_total = db.Column(db.DECIMAL(10, 5))
-    concate = db.Column(db.String(100))
-    qgis_quant = db.Column(db.DECIMAL(10, 5))
-    qgis_rate = db.Column(db.DECIMAL(10, 5))
-    qgis_url = db.Column(db.String(255))
-    po_check = db.Column(db.String(100))
-    comment = db.Column(db.String(255))
-    comment_stl=db.Column(db.String(255))
-    resubmission = db.Column(db.Boolean, default=False)
-    seed = db.Column(db.Integer, db.ForeignKey('eod_dump.Seed'))
-
-
-    def to_dict(self):
-        """Convert the SQLAlchemy object to a dictionary."""
-        return {c.key: getattr(self, c.key) for c in inspect(self).mapper.column_attrs}
-
-
-class ActivityLog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    action = db.Column(db.String(255), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.now)
-
-class WorkCat(db.Model):
-    __tablename__ = 'work_cat'
-    id = db.Column(db.Integer, primary_key=True)  # New primary key column
-    Rate_Code = db.Column(db.String(255))  # Existing column
-    Category = db.Column(db.String(255))
-
-    def to_dict(self):
-        return {column.name: getattr(self, column.name) for column in self.__table__.columns}
-        
-class SubcontractorRate(db.Model):
-    __tablename__ = 'subcontractor_rate'
-    id = db.Column(db.Integer, primary_key=True)
-    rate_code = db.Column(db.String(10), nullable=False)
-    work_category = db.Column(db.String(50), nullable=False)
-    rate_type = db.Column(db.String(50), nullable=False)
-    item = db.Column(db.String(255), nullable=False)
-    unit = db.Column(db.String(50), nullable=False)
-    heavy_and_dirty = db.Column(db.String(50), nullable=True)
-    include_hnd_in_service_price = db.Column(db.String(3), nullable=True)
-    description = db.Column(db.Text, nullable=True)
-    afs = db.Column(db.DECIMAL(10, 2), nullable=True)
-    bk_comms = db.Column(db.DECIMAL(10, 2), nullable=True)
-    ccg = db.Column(db.DECIMAL(10, 2), nullable=True)
-    jk_comms = db.Column(db.DECIMAL(10, 2), nullable=True)
-    jdc = db.Column(db.DECIMAL(10, 2), nullable=True)
-    jto = db.Column(db.DECIMAL(10, 2), nullable=True)
-    nola = db.Column(db.DECIMAL(10, 2), nullable=True)
-    rollo = db.Column(db.DECIMAL(10, 2), nullable=True)
-    salcs = db.Column(db.DECIMAL(10, 2), nullable=True)
-    upscale = db.Column(db.DECIMAL(10, 2), nullable=True)
-    vsl = db.Column(db.DECIMAL(10, 2), nullable=True)
-    vus = db.Column(db.DECIMAL(10, 2), nullable=True)
-    set = db.Column(db.DECIMAL(10, 2), nullable=True)
-
-    def to_dict(self):
-        return {column.name: getattr(self, column.name) for column in self.__table__.columns}
-
-
-
-class ClientRate(db.Model):
-    __tablename__ = 'client_rate'
-    id = db.Column(db.Integer, primary_key=True)
-    rate_code = db.Column(db.String(50))
-    rate_type = db.Column(db.String(255))
-    item = db.Column(db.String(255))
-    unit = db.Column(db.String(50))
-    heavy_and_dirty = db.Column(db.String(25))
-    include_hnd_in_service_price = db.Column(db.String(25))
-    rates = db.Column(db.String(255))
-    comments = db.Column(db.String(255))
-
-    def to_dict(self):
-        return {column.name: getattr(self, column.name) for column in self.__table__.columns}
-
-
-class UserRevenue(db.Model):
-    __tablename__ = 'user_revenue'
-    id = db.Column(db.Integer, primary_key=True)
-    user_name = db.Column(db.String(255), nullable=False)
-    revenue_generating_entity = db.Column(db.String(255), nullable=False)
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_name': self.user_name,
-            'revenue_generating_entity': self.revenue_generating_entity
-        }
-
-
-
-
-
-class EODDump(db.Model):
-    __tablename__ = 'eod_dump'
-    Date = db.Column(db.Date)
-    TeamLeader = db.Column(db.String(255))
-    Gang = db.Column(db.String(255))
-    Work_Type = db.Column(db.String(255))
-    Item_Mst_ID = db.Column(db.String(255))
-    Item_Description = db.Column(db.String(255))
-    Activity = db.Column(db.String(255))
-    WeekNumber = db.Column(db.String(255))
-    Output_Date_MonthYear = db.Column(db.String(255))
-    Qty = db.Column(db.Integer)
-    UOM = db.Column(db.String(255))
-    Rate = db.Column(DECIMAL(10, 2))
-    Total = db.Column(DECIMAL(10, 2))
-    Area = db.Column(db.String(255))
-    Mst_Item_Rpt_Group1 = db.Column(db.String(255))
-    Project_ID = db.Column(db.Integer)
-    Project_Name = db.Column(db.String(255))
-    Seed = db.Column(db.Integer, primary_key=True)
-    Comment = db.Column(db.Text)
-    Planning_KPI1 = db.Column(db.String(255))
-    Email_ID = db.Column(db.String(255))
-    User_Name = db.Column(db.String(255))
-    AuditLog = db.Column(db.String(255))
-    Work_Period = db.Column(db.String(255))
-    Job_Pack_No = db.Column(db.String(255))
-    Route = db.Column(db.String(255))
-    Work_Category = db.Column(db.String(255))
-    Approved_Status = db.Column(db.String(255))
-    PMO_Coordinator = db.Column(db.String(255))
-    QA_remarks = db.Column(db.Text)
-    Span_length = db.Column(db.String(255))
-    # Qty_2 = db.Column(db.Integer)
-    Taken_To_Revenue = db.Column(db.Boolean)
-    Taken_To_Revenue_Date = db.Column(db.DateTime, nullable=True)
-    
-    user_revenue = relationship(
-        "UserRevenue",
-        primaryjoin=foreign(func.lower(User_Name)) == remote(func.lower(UserRevenue.user_name)),
-        viewonly=True
-    )
-
-    work_cat = relationship(
-        "WorkCat",
-        primaryjoin=foreign(Item_Mst_ID) == remote(WorkCat.Rate_Code),
-        viewonly=True
-    )
-
-    def to_dict(self):
-        result = {column.name: getattr(self, column.name) for column in self.__table__.columns}
-        result['Date'] = self.Date.strftime('%d-%m-%Y') if self.Date else None
-        return result
-        # return {column.name: getattr(self, column.name) for column in self.__table__.columns}
-
-
-
-def validate_email_id(email):
-    try:
-        # Step 1: Validate the syntax of the email
-        valid = validate_email(email)
-        normalized_email = valid.email  # Get the normalized form of the email (lowercase, no extra spaces, etc.)
-
-        # Step 2: Check if the domain and email exist (MX and SMTP check)
-        # if validate_existence(email, verify=True):
-        #     print(f"Email '{normalized_email}' is valid and exists.")
-        #     return 1
-
-        if valid:
-            print(f"Email '{normalized_email}' has a valid syntax but may not exist (SMTP check not done).")
-            return 1
-    
-    except EmailNotValidError as e:
-        # Handle invalid email syntax
-        print(f"Invalid email syntax: {str(e)}")
-        return 0
-
-
-def send_welcome_email(to_email, password,name):
-    
-    # print(reset_token)
-    # Gmail credentials
-    smtp_server = 'smtp.gmail.com'
-    smtp_port = 587
-    from_email = 'stlautomation123@gmail.com'
-    password = 'thyuysdcdonpymsr'
-
-    # Create the email content
-    subject = 'Welcome to XX Portal'
-    body = '''
-    Hi {name},
-
-    We welcome you to STL UK project management portal. 
-    
-    Here are your credential to login the portal
-
-    Portal Link: "http://10.100.130.76:5000"
-    Username: {name}
-    Email id: {to_email}
-    Password: {password}
-
-    Kindly change password after login for security reasons and update your profile. 
-    
-    Happy Exploring!!
-    Team Automation
-    automation.gsb@stl.tech
-    '''.format(name=name, to_email=to_email, password=password)
-
-    # Create a MIMEText object and set up the email headers
-    msg = MIMEMultipart()
-    msg['From'] = from_email
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
-
-    try:
-        # Connect to the Gmail SMTP server and send the email
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()  # Upgrade the connection to a secure encrypted SSL/TLS connection
-        server.login(from_email, password)
-        server.send_message(msg)
-        server.quit()
-
-        print('Email sent successfully')
-    except Exception as e:
-        print(f'Failed to send email: {e}')
-
-
-# Role-Based Access Control Decorator
-def role_required(roles):
-    def wrapper(fn):
-        @wraps(fn)
-        def decorator(*args, **kwargs):
-            verify_jwt_in_request()
-            current_user = User.query.filter_by(email_id=get_jwt_identity()).first()
-            if current_user.role not in roles:
-                return jsonify({"msg": "Unauthorized access"}), 403
-            return fn(*args, **kwargs)
-        return decorator
-    return wrapper
-
-
-
-
-
-
-
-
-@app.route('/api/register', methods=['POST'])
-@role_required(['admin'])
-@jwt_required()
-def register_user():
-    """
-    Register a new user
-    ---
-    tags:
-      - User Management
-    security:
-      - JWT: []
-    parameters:
-      - name: body
-        in: body
-        required: true
-        schema:
-          type: object
-          required:
-            - username
-            - password
-            - email_id
-            - role
-          properties:
-            username:
-              type: string
-              description: Unique username for the new user
-            password:
-              type: string
-              description: Password for the new user
-            email_id:
-              type: string
-              description: Unique email address for the new user
-            phone_no:
-              type: string
-              description: Phone number of the new user (optional)
-            role:
-              type: string
-              description: Role of the new user (e.g., admin, editor, viewer)
-            can_edit:
-              type: boolean
-              description: Whether the user has edit permissions (default is false)
-    responses:
-      201:
-        description: User registered successfully
-        schema:
-          type: object
-          properties:
-            message:
-              type: string
-              example: User registered successfully
-      400:
-        description: Bad request
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: Username, password, email_id, and role are required
-      401:
-        description: Unauthorized access
-      403:
-        description: Forbidden - User does not have admin role
-    """
-    data = request.json
-    username = data.get('username')
-    password = data.get('password')
-    email_id = data.get('email_id')
-    phone_no = data.get('phone_no')
-    role = data.get('role')
-    can_edit = data.get('can_edit', False)
-    print(username,password,email_id,phone_no,role,can_edit)
-
-
-    
-    if not username or not password or not email_id or not role:
-        return jsonify({'error': 'Username, password, email_id, and role are required'}), 400
-
-    if validate_email_id(email_id)==0:
-        return jsonify({'error': 'Email Id does not exists'}), 400
-
-    if User.query.filter_by(email_id=email_id).first():
-        return jsonify({'error': 'User already exists'}), 400
-
-    if User.query.filter_by(email_id=email_id).first():
-        return jsonify({'error': 'Email ID already in use'}), 400
-
-    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-    new_user = User(username=username, password=hashed_password, email_id=email_id, phone_no=phone_no, role=role, can_edit=can_edit)
-    db.session.add(new_user)
-    send_welcome_email(email_id,password,username)
-    db.session.commit()
-
-    return jsonify({'message': 'User registered successfully'}), 201
-
-
-
+app4_blueprint = Blueprint('app4', __name__)
 
 
 # PUT request to update an existing user revenue record
@@ -528,27 +115,27 @@ def edit_eod_dump(seed):
 
 
 
-@app.route('/api/pn_raw/<unique_id>', methods=['DELETE'])
-@jwt_required()
-@role_required(['admin', 'editor'])
-def delete_pn_raw(unique_id):
-    try:
-        # Query the PnRaw table to find the record with the given unique_id
-        record = db.session.query(PnRaw).filter(PnRaw.unique_id == unique_id).first()
+# @app.route('/api/pn_raw/<unique_id>', methods=['DELETE'])
+# @jwt_required()
+# @role_required(['admin', 'editor'])
+# def delete_pn_raw(unique_id):
+#     try:
+#         # Query the PnRaw table to find the record with the given unique_id
+#         record = db.session.query(PnRaw).filter(PnRaw.unique_id == unique_id).first()
         
-        # Check if the record exists
-        if record is None:
-            return jsonify({"message": "Record not found"}), 404
+#         # Check if the record exists
+#         if record is None:
+#             return jsonify({"message": "Record not found"}), 404
         
-        # Delete the record
-        db.session.delete(record)
-        db.session.commit()
+#         # Delete the record
+#         db.session.delete(record)
+#         db.session.commit()
         
-        return jsonify({"message": "Record deleted successfully"}), 200
+#         return jsonify({"message": "Record deleted successfully"}), 200
     
-    except Exception as e:
-        db.session.rollback()  # Rollback in case of error
-        return jsonify({"error": str(e)}), 500
+#     except Exception as e:
+#         db.session.rollback()  # Rollback in case of error
+#         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/work_cat', methods=['POST'])
@@ -563,54 +150,6 @@ def create_work_cat():
     db.session.commit()
     return jsonify(new_work_cat.to_dict()), 201
 
-@app.route('/api/subcontractor_rate', methods=['POST'])
-@jwt_required()
-def create_subcontractor_rate():
-    data = request.json
-    new_rate = SubcontractorRate(
-        rate_code=data.get('rate_code'),
-        work_category=data.get('work_category'),
-        rate_type=data.get('rate_type'),
-        item=data.get('item'),
-        unit=data.get('unit'),
-        heavy_and_dirty=data.get('heavy_and_dirty'),
-        include_hnd_in_service_price=data.get('include_hnd_in_service_price'),
-        description=data.get('description'),
-        afs=data.get('afs'),
-        bk_comms=data.get('bk_comms'),
-        ccg=data.get('ccg'),
-        jk_comms=data.get('jk_comms'),
-        jdc=data.get('jdc'),
-        jto=data.get('jto'),
-        nola=data.get('nola'),
-        rollo=data.get('rollo'),
-        salcs=data.get('salcs'),
-        upscale=data.get('upscale'),
-        vsl=data.get('vsl'),
-        vus=data.get('vus'),
-        set=data.get('set')
-    )
-    db.session.add(new_rate)
-    db.session.commit()
-    return jsonify(new_rate.to_dict()), 201
-
-@app.route('/api/client_rate', methods=['POST'])
-@jwt_required()
-def create_client_rate():
-    data = request.json
-    new_client_rate = ClientRate(
-        rate_code=data.get('rate_code'),
-        rate_type=data.get('rate_type'),
-        item=data.get('item'),
-        unit=data.get('unit'),
-        heavy_and_dirty=data.get('heavy_and_dirty'),
-        include_hnd_in_service_price=data.get('include_hnd_in_service_price'),
-        rates=data.get('rates'),
-        comments=data.get('comments')
-    )
-    db.session.add(new_client_rate)
-    db.session.commit()
-    return jsonify(new_client_rate.to_dict()), 201
 
 @app.route('/api/user_revenue', methods=['POST'])
 @jwt_required()
@@ -623,60 +162,6 @@ def create_user_revenue():
     db.session.add(new_user_revenue)
     db.session.commit()
     return jsonify(new_user_revenue.to_dict()), 201
-
-
-# PUT request to update an existing subcontractor rate
-@app.route('/api/subcontractor_rate/<int:id>', methods=['PUT'])
-@jwt_required()
-@role_required(['admin', 'editor'])
-def update_subcontractor_rate(id):
-    # Fetch the subcontractor rate by ID
-    subcontractor_rate = SubcontractorRate.query.get_or_404(id)
-
-    # Get the data from the request
-    data = request.json
-
-    # Update fields if they are provided in the request
-    subcontractor_rate.rate_code = data.get('rate_code', subcontractor_rate.rate_code)
-    subcontractor_rate.work_category = data.get('work_category', subcontractor_rate.work_category)
-    subcontractor_rate.rate_type = data.get('rate_type', subcontractor_rate.rate_type)
-    subcontractor_rate.item = data.get('item', subcontractor_rate.item)
-    subcontractor_rate.unit = data.get('unit', subcontractor_rate.unit)
-    subcontractor_rate.heavy_and_dirty = data.get('heavy_and_dirty', subcontractor_rate.heavy_and_dirty)
-    subcontractor_rate.include_hnd_in_service_price = data.get('include_hnd_in_service_price', subcontractor_rate.include_hnd_in_service_price)
-    subcontractor_rate.description = data.get('description', subcontractor_rate.description)
-    subcontractor_rate.afs = data.get('afs', subcontractor_rate.afs)
-    subcontractor_rate.bk_comms = data.get('bk_comms', subcontractor_rate.bk_comms)
-    subcontractor_rate.ccg = data.get('ccg', subcontractor_rate.ccg)
-    subcontractor_rate.jk_comms = data.get('jk_comms', subcontractor_rate.jk_comms)
-    subcontractor_rate.jdc = data.get('jdc', subcontractor_rate.jdc)
-    subcontractor_rate.jto = data.get('jto', subcontractor_rate.jto)
-    subcontractor_rate.nola = data.get('nola', subcontractor_rate.nola)
-    subcontractor_rate.rollo = data.get('rollo', subcontractor_rate.rollo)
-    subcontractor_rate.salcs = data.get('salcs', subcontractor_rate.salcs)
-    subcontractor_rate.upscale = data.get('upscale', subcontractor_rate.upscale)
-    subcontractor_rate.vsl = data.get('vsl', subcontractor_rate.vsl)
-    subcontractor_rate.vus = data.get('vus', subcontractor_rate.vus)
-    subcontractor_rate.set = data.get('set', subcontractor_rate.set)
-
-    # Commit changes to the database
-    db.session.commit()
-
-    return jsonify(subcontractor_rate.to_dict()), 200
-
-# DELETE request to delete a subcontractor rate by ID
-@app.route('/api/subcontractor_rate/<int:id>', methods=['DELETE'])
-@jwt_required()
-@role_required(['admin', 'editor'])
-def delete_subcontractor_rate(id):
-    # Fetch the subcontractor rate by ID
-    subcontractor_rate = SubcontractorRate.query.get_or_404(id)
-
-    # Delete the record from the database
-    db.session.delete(subcontractor_rate)
-    db.session.commit()
-
-    return jsonify({"message": "Subcontractor rate card deleted successfully"}), 200    
 
 
 # PUT request to update an existing client rate
@@ -869,6 +354,7 @@ def logout():
         description: Unauthorized - Invalid or missing token
     """
     return jsonify({'message': 'Logout successful'}), 200
+
 
 def calculate_cost(seed, eod_item):
     ooh_rates = SubcontractorRate.query.filter_by(rate_code='OOH001').first()
@@ -1148,55 +634,36 @@ def get_user_revenues():
 
     return jsonify(results_dict), 200    
 
+@app.route('/api/work_cat', methods=['GET'])
+@jwt_required()
+@role_required(['admin', 'editor', 'viewer'])
+def get_work_cats():
+    # Extract query parameters
+    filters = request.args.to_dict()
 
-def send_reset_email(to_email, reset_token):
-    
-    print(reset_token)
-    # Gmail credentials
-    smtp_server = 'smtp.gmail.com'
-    smtp_port = 587
-    from_email = 'stlautomation123@gmail.com'
-    password = 'thyuysdcdonpymsr'
+    # Build the query dynamically
+    query = WorkCat.query
+    for key, value in filters.items():
+        if hasattr(WorkCat, key):
+            query = query.filter(getattr(WorkCat, key) == value)
 
-    # Create the email content
-    subject = 'Password Reset Request | XX Portal'
-    body = f'''
-    Hi,
+    # Execute the query and get results
+    results = query.all()
 
-    We received a request to reset your password. Click the link below to reset it:
+    # Convert results to dictionary
+    results_dict = [result.to_dict() for result in results]
 
-    http://10.100.130.76:5000/reset_password?token={reset_token}
+    return jsonify(results_dict), 200  
 
-    If you did not request this, please ignore this email.
 
-    Best regards,
-    Team Automation
-    gsb.automation@stl.tech
-    '''
 
-    # Create a MIMEText object and set up the email headers
-    msg = MIMEMultipart()
-    msg['From'] = from_email
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
 
-    try:
-        # Connect to the Gmail SMTP server and send the email
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()  # Upgrade the connection to a secure encrypted SSL/TLS connection
-        server.login(from_email, password)
-        server.send_message(msg)
-        server.quit()
 
-        print('Email sent successfully')
-    except Exception as e:
-        print(f'Failed to send email: {e}')
+
+
 
 # Update the forgot password API to use email_id
 @app.route('/api/forgot_password', methods=['POST'])
-@jwt_required()
-@role_required(['admin', 'editor'])
 def forgot_password():
     """
     Request Password Reset
@@ -1255,15 +722,16 @@ def forgot_password():
     reset_token = create_access_token(identity=email_id, expires_delta=timedelta(hours=1))
 
     # Send the reset token via email
-    send_reset_email(email_id, reset_token)
+    # send_reset_email(email_id, reset_token)
 
-    return jsonify({'message': 'Password reset link has been sent'}), 200
+    return jsonify({'message': 'Password reset link not sent', 'reset_token': reset_token}), 200
+
+
+
 
 
 # Update the reset password API to use email_id
 @app.route('/api/reset_password', methods=['POST'])
-@jwt_required()
-@role_required(['admin', 'editor'])
 def reset_password():
     """
     Reset User Password
@@ -1322,11 +790,21 @@ def reset_password():
 
     try:
         # Decode the reset token to get the email_id
-        email_id = jwt.decode_token(reset_token)['identity']
+        token_data = decode_token(reset_token)
+        print(token_data)
+        email_id = token_data['sub']  # 'sub' is where the identity is stored
+        # email_id = jwt.decode_token(reset_token)['identity']
+        print(email_id)
+    except ExpiredSignatureError:
+        return jsonify({'error': 'Expired token'}), 400
+    except InvalidTokenError:
+        return jsonify({'error': 'Invalid token'}), 400
     except Exception as e:
-        return jsonify({'error': 'Invalid or expired token'}), 400
+        print(f"Unexpected error decoding token: {str(e)}")
+        return jsonify({'error': 'Error decoding token'}), 400
 
     user = User.query.filter_by(email_id=email_id).first()
+    print(user)
     if not user:
         return jsonify({'error': 'User not found'}), 404
 
@@ -1487,73 +965,6 @@ def add_user_revenues():
 
     return jsonify(results), 201 
 
-@app.route('/api/login', methods=['POST'])
-def login():
-    """
-    User Login
-    ---
-    tags:
-      - Authentication
-    parameters:
-      - name: body
-        in: body
-        required: true
-        schema:
-          type: object
-          properties:
-            email_id:
-              type: string
-            password:
-              type: string
-    responses:
-      200:
-        description: Login successful
-        schema:
-          type: object
-          properties:
-            access_token:
-              type: string
-            role:
-              type: string
-            can_edit:
-              type: boolean
-            id:
-              type: integer
-      400:
-        description: Missing or invalid data
-      401:
-        description: Invalid username or password
-    """
-    # Parse the request JSON
-    data = request.get_json()
-
-    # Check if required fields are present
-    if not data or not data.get('email_id') or not data.get('password'):
-        return jsonify({"msg": "Missing email_id or password"}), 400
-
-    email_id = data.get('email_id').strip().lower() if data.get('email_id') else None
-    password = data.get('password').strip() if data.get('password') else None
-
-    # Validate fields are not empty after trimming
-    if not email_id or not password:
-        return jsonify({"msg": "email_id or password cannot be empty"}), 400
-
-    # Query the user from the database
-    user = User.query.filter_by(email_id=email_id).first()
-
-    if user and bcrypt.check_password_hash(user.password, password):
-        # Create access token (assuming Flask-JWT-Extended is used)
-        access_token = create_access_token(identity=user.email_id)
-
-        return jsonify(
-            access_token=access_token,
-            role=user.role,
-            can_edit=user.can_edit,
-            id=user.id
-        ), 200
-
-    # Invalid credentials
-    return jsonify({"msg": "Invalid email_id or password"}), 401
 
 @app.route('/api/data', methods=['GET'])
 @jwt_required()
@@ -1834,88 +1245,6 @@ def get_aggregated_revenue_data():
 
 
 
-# @app.route('/api/data/sum_revenue', methods=['GET'])
-# @jwt_required()
-# @role_required(['admin', 'editor', 'viewer'])
-# def get_sum_revenue_data():
-#     try:
-#         filters = request.args.to_dict()
-
-#         # Handle date range
-#         start_date = filters.get('start_date')
-#         end_date = filters.get('end_date')
-
-#         if start_date and end_date:
-#             start_date = datetime.strptime(start_date, "%d-%m-%Y").date()
-#             end_date = datetime.strptime(end_date, "%d-%m-%Y").date()
-#         else:
-#             # Default to last 30 days if no date range is provided
-#             end_date = datetime.now().date()
-#             start_date = end_date - timedelta(days=30)
-
-#         query = db.session.query(
-#             EODDump.Date,
-#             func.sum(EODDump.Qty * ClientRate.rates).label('revenue'),
-            
-#         ).join(
-#             UserRevenue,
-#             func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)       
-#         ).join(
-#             ClientRate,
-#             EODDump.Item_Mst_ID == ClientRate.rate_code
-#         ).filter(
-#             EODDump.Date.between(start_date, end_date)
-#         ).group_by(
-#             EODDump.Date       
-#              )
-
-#         # Apply additional filters
-#         for key, value in filters.items():
-#             if key not in ['start_date', 'end_date'] and hasattr(EODDump, key):
-#                 query = query.filter(getattr(EODDump, key) == value)
-
-#         result = query.all()
-
-#         # aggregated_data = []
-#         # ************
-#         aggregated_data = []
-#         for row in result:
-#             # Categorize the approved_status
-#             if row.Approved_Status.lower() in ['approved']:
-#                 status_category = 'approved'
-#             elif row.Approved_Status.lower() in ['rejected']:
-#                 status_category = 'rejected'
-#             else:
-#                 status_category = 'risk'
-
-#             aggregated_data.append({
-#                 'date': row.Date.strftime('%d-%m-%Y'),
-#                 'approved_status': status_category,
-#                 'revenue_generating_entity': row.revenue_generating_entity,
-#                 'revenue': float(row.revenue),
-#             })
-
-#         response = {
-#             'total_records': len(aggregated_data),
-#             'data': aggregated_data
-#         }
-#         # ************
-#         # for row in result:
-#         #     aggregated_data.append({
-#         #         'date': row.Date.strftime('%d-%m-%Y'),
-#         #         'revenue': float(row.revenue),
-#         #     })
-
-#         # response = {
-#         #     'total_records': len(aggregated_data),
-#         #     'data': aggregated_data
-#         # }
-
-#         return jsonify(response)
-
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-
 
 @app.route('/api/data/sum_revenue', methods=['GET'])
 @jwt_required()
@@ -2153,6 +1482,7 @@ def dashboard_data():
     return jsonify(result)
 
 
+cache = TTLCache(maxsize=100, ttl=3600)  # Cache for 1 hour
 
 
 @app.route('/api/dashboard_data1', methods=['GET'])
@@ -2160,96 +1490,107 @@ def dashboard_data():
 @role_required(['admin', 'editor'])
 def dashboard_data1():
     try:
+        # Check cache
+        cached_result = cache.get('dashboard_data1')
+        if cached_result:
+            return jsonify(cached_result), 200
+
         today = datetime.now()
         six_months_ago = today - timedelta(days=180)
 
-        last_6_months_data = db.session.query(
+        # Combined query for last 6 months and older data
+        invoice_data = db.session.query(
             func.date_format(PnRaw.date_of_application, '%Y-%m').label('month'),
-            func.sum(PnRaw.approved_total).label('total_invoice')
-        ).filter(
-            PnRaw.date_of_application >= six_months_ago
-        ).group_by('month').all()
+            func.sum(PnRaw.approved_total).label('total_invoice'),
+            case(
+                (PnRaw.date_of_application >= six_months_ago, 'last_6_months'),
+                else_='older_months'
+            ).label('period')
+        ).group_by('month', 'period').all()
 
-        older_months_data = db.session.query(
-            func.date_format(PnRaw.date_of_application, '%Y-%m').label('month'),
-            func.sum(PnRaw.approved_total).label('total_invoice')
-        ).filter(
-            PnRaw.date_of_application < six_months_ago
-        ).group_by('month').all()
+        # Revenue calculation query
+        revenue_data = db.session.query(
+            func.date_format(PnRaw.date_of_application, '%Y-%m').label('invoice_month'),
+            func.date_format(EODDump.Date, '%Y-%m').label('revenue_month'),
+            func.sum(EODDump.Qty * ClientRate.rates).label('revenue')
+        ).join(
+            EODDump, PnRaw.seed == EODDump.Seed
+        ).join(
+            UserRevenue, func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)
+        ).join(
+            ClientRate, EODDump.Item_Mst_ID == ClientRate.rate_code
+        ).group_by(
+            'invoice_month', 'revenue_month'
+        ).all()
 
-        def get_revenue_breakup(months_data):
-            result = []
-            aggregated_total_revenue=0
-            aggregated_total_invoice=0
+        # Process the data
+        result = process_data(invoice_data, revenue_data, six_months_ago)
 
-            for invoice_month, total_invoice in months_data:
-                aggregated_revenue_old = 0
-                aggregated_total_invoice += float(total_invoice)
-                month_data = {
-                    'month': invoice_month,
-                    'total_invoice': float(total_invoice),
-                    'total_revenue': 0,
-                    'revenue_breakup': []
-                }
+        # Cache the result
+        cache['dashboard_data1'] = result
 
-                start_date = datetime.strptime(invoice_month, '%Y-%m')
-                end_date = datetime(start_date.year, start_date.month, calendar.monthrange(start_date.year, start_date.month)[1])
-
-                revenue_breakup = db.session.query(
-                    func.date_format(EODDump.Date, '%Y-%m').label('revenue_month'),
-                    func.sum(EODDump.Qty * ClientRate.rates).label('revenue')
-                ).join(
-                    UserRevenue,
-                    func.lower(UserRevenue.user_name) == func.lower(EODDump.User_Name)
-                ).join(
-                    ClientRate,
-                    EODDump.Item_Mst_ID == ClientRate.rate_code
-                ).join(
-                    PnRaw,
-                    PnRaw.seed == EODDump.Seed
-                ).filter(
-                    PnRaw.date_of_application.between(start_date, end_date)
-                ).group_by(
-                    'revenue_month'
-                ).all()
-
-                for revenue_month, revenue in revenue_breakup:
-                    revenue = float(revenue)
-                    if datetime.strptime(revenue_month, '%Y-%m') >= six_months_ago:
-                        month_data['revenue_breakup'].append({
-                            'month': revenue_month,
-                            'revenue': revenue
-                        })
-                    else:
-                        aggregated_revenue_old += revenue
-                    month_data['total_revenue'] += revenue
-                    aggregated_total_revenue += revenue
-
-                month_data['revenue_breakup'].append({
-                    'month': 'aggregated_revenue_old',
-                    'revenue': aggregated_revenue_old
-                })
-                aggregated_revenue_old = 0
-                result.append(month_data)
-
-            result.append({
-              'aggregated_total_revenue' : aggregated_total_revenue,
-              'aggregated_total_invoice' : aggregated_total_invoice
-            })    
-            return result
-
-        last_6_months_result = get_revenue_breakup(last_6_months_data)
-        older_months_result = get_revenue_breakup(older_months_data)
-
-        response = {
-            'last_6_months': last_6_months_result,
-            'older_months': older_months_result
-        }
-
-        return jsonify(response), 200
+        return jsonify(result), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def process_data(invoice_data, revenue_data, six_months_ago):
+    last_6_months_result = []
+    older_months_result = []
+    aggregated_total_revenue = 0
+    aggregated_total_invoice = 0
+
+    revenue_dict = {}
+    for invoice_month, revenue_month, revenue in revenue_data:
+        if invoice_month not in revenue_dict:
+            revenue_dict[invoice_month] = {}
+        revenue_dict[invoice_month][revenue_month] = float(revenue)
+
+    for month, total_invoice, period in invoice_data:
+        month_data = {
+            'month': month,
+            'total_invoice': float(total_invoice),
+            'total_revenue': 0,
+            'revenue_breakup': []
+        }
+
+        if month in revenue_dict:
+            aggregated_revenue_old = 0
+            for revenue_month, revenue in revenue_dict[month].items():
+                if datetime.strptime(revenue_month, '%Y-%m') >= six_months_ago:
+                    month_data['revenue_breakup'].append({
+                        'month': revenue_month,
+                        'revenue': revenue
+                    })
+                else:
+                    aggregated_revenue_old += revenue
+                month_data['total_revenue'] += revenue
+                aggregated_total_revenue += revenue
+
+            month_data['revenue_breakup'].append({
+                'month': 'aggregated_revenue_old',
+                'revenue': aggregated_revenue_old
+            })
+
+        aggregated_total_invoice += float(total_invoice)
+
+        if period == 'last_6_months':
+            last_6_months_result.append(month_data)
+        else:
+            older_months_result.append(month_data)
+
+    summary = {
+        'aggregated_total_revenue': aggregated_total_revenue,
+        'aggregated_total_invoice': aggregated_total_invoice
+    }
+
+    return {
+        'last_6_months': last_6_months_result + [summary],
+        'older_months': older_months_result + [summary]
+    }        
+
+
 
 
 
@@ -2268,79 +1609,7 @@ def manage_user():
 
 
 
-# Read a single user by ID
-@app.route('/api/users/<int:id>', methods=['GET'])
-@jwt_required()
-@role_required(['admin'])
-def get_user(id):
-    user = User.query.get(id)
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    return jsonify({
-        'id': user.id,
-        'username': user.username,
-        'email_id': user.email_id,
-        'phone_no': user.phone_no,
-        'role': user.role,
-        'can_edit': user.can_edit
-    }), 200
 
-
-# Update a user
-@app.route('/api/users/<int:id>', methods=['PUT'])
-@jwt_required()
-@role_required(['admin'])
-def update_user(id):
-    user = User.query.get(id)
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-
-    data = request.json
-    if 'username' in data:
-        user.username = data['username']
-    if 'password' in data:
-        user.password = generate_password_hash(data['password'], method='sha256')
-    if 'email_id' in data:
-        user.email_id = data['email_id']
-    if 'phone_no' in data:
-        user.phone_no = data['phone_no']
-    if 'role' in data:
-        user.role = data['role']
-    if 'can_edit' in data:
-        user.can_edit = data['can_edit']
-
-    db.session.commit()
-    return jsonify({"message": "User updated successfully"}), 200
-
-
-# Delete a user
-@app.route('/api/users/<int:id>', methods=['DELETE'])
-@jwt_required()
-@role_required(['admin', 'editor'])
-def delete_user(id):
-    user = User.query.get(id)
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-
-    db.session.delete(user)
-    db.session.commit()
-    return jsonify({"message": "User deleted successfully"}), 200
-
-
-
-@app.route('/api/users', methods=['GET'])
-@jwt_required()
-@role_required(['admin'])
-def get_users():
-    users = User.query.all()
-    return jsonify([{
-        'id': user.id,
-        'username': user.username,
-        'email_id': user.email_id,
-        'phone_no': user.phone_no,
-        'role': user.role,
-        'can_edit': user.can_edit
-    } for user in users]), 200
 
 
 
@@ -2524,17 +1793,5 @@ def get_unique_values():
         return jsonify({"error": str(e)}), 500
 
 
-
-
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-        if not User.query.filter_by(email_id='admin@gmail.com').first():
-            admin = User(username='admin', password=bcrypt.generate_password_hash('adminpass').decode('utf-8'), role='admin', can_edit=True)
-            editor = User(username='editor', password=bcrypt.generate_password_hash('editorpass').decode('utf-8'), role='editor', can_edit=True)
-            viewer = User(username='viewer', password=bcrypt.generate_password_hash('viewerpass').decode('utf-8'), role='viewer', can_edit=False)
-            db.session.add_all([admin, editor, viewer])
-            db.session.commit()
-    app.run(host='0.0.0.0', port=5001,debug=True)
 
 

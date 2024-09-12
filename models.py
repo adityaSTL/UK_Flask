@@ -1,5 +1,3 @@
-from app3 import app, db  
-
 
 from datetime import datetime, timedelta
 from flask_cors import CORS
@@ -7,6 +5,9 @@ from sqlalchemy import DECIMAL
 from sqlalchemy.orm import relationship, foreign, remote
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from conf import db
+from sqlalchemy import func
+from sqlalchemy import inspect
 
 
 
@@ -72,17 +73,15 @@ class ActivityLog(db.Model):
     action = db.Column(db.String(255), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.now)
 
-
 class WorkCat(db.Model):
     __tablename__ = 'work_cat'
-    id = db.Column(db.Integer, primary_key=True)
-    Rate_Code = db.Column(db.String(255))
+    id = db.Column(db.Integer, primary_key=True)  # New primary key column
+    Rate_Code = db.Column(db.String(255))  # Existing column
     Category = db.Column(db.String(255))
 
     def to_dict(self):
         return {column.name: getattr(self, column.name) for column in self.__table__.columns}
-
-
+        
 class SubcontractorRate(db.Model):
     __tablename__ = 'subcontractor_rate'
     id = db.Column(db.Integer, primary_key=True)
@@ -115,7 +114,8 @@ class SubcontractorRate(db.Model):
 
 class ClientRate(db.Model):
     __tablename__ = 'client_rate'
-    rate_code = db.Column(db.String(50), primary_key=True)
+    id = db.Column(db.Integer, primary_key=True)
+    rate_code = db.Column(db.String(50))
     rate_type = db.Column(db.String(255))
     item = db.Column(db.String(255))
     unit = db.Column(db.String(50))
@@ -140,6 +140,8 @@ class UserRevenue(db.Model):
             'user_name': self.user_name,
             'revenue_generating_entity': self.revenue_generating_entity
         }
+
+
 
 
 
@@ -197,3 +199,7 @@ class EODDump(db.Model):
         result['Date'] = self.Date.strftime('%d-%m-%Y') if self.Date else None
         return result
         # return {column.name: getattr(self, column.name) for column in self.__table__.columns}
+
+
+
+
