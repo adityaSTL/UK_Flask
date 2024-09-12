@@ -17,3 +17,5 @@ dist/
 *.out
 *.xlsx
 *.pub
+myenv
+migrations
