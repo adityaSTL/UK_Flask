@@ -8,6 +8,9 @@ from flask_sqlalchemy import SQLAlchemy
 from conf import db
 from sqlalchemy import func
 from sqlalchemy import inspect
+from helper_func import format_date
+
+
 
 
 
@@ -19,9 +22,22 @@ class User(db.Model):
     phone_no = db.Column(db.String(20), nullable=True)
     role = db.Column(db.String(20), nullable=False)
     can_edit = db.Column(db.Boolean, default=False)
+    profile_image = db.Column(db.String(255), nullable=False) #-- This stores the image file path
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     # name = db.Column(db.String(100), default=False)
     def to_dict(self):
-        return {column.name: getattr(self, column.name) for column in self.__table__.columns}
+        return {
+            "id": self.id,
+            "username": self.username,
+            "email_id": self.email_id,
+            "phone_no": self.phone_no,
+            "role": self.role,
+            "can_edit": self.can_edit,
+            "profile_image": self.profile_image,
+            "created_at": format_date(self.created_at),  # Format the date before returning it
+            "updated_at": format_date(self.updated_at)   # Format the date before returning it
+        }
 
 
 class PnRaw(db.Model):
@@ -62,9 +78,18 @@ class PnRaw(db.Model):
     seed = db.Column(db.Integer, db.ForeignKey('eod_dump.Seed'))
 
 
+    
+
+
     def to_dict(self):
-        """Convert the SQLAlchemy object to a dictionary."""
-        return {c.key: getattr(self, c.key) for c in inspect(self).mapper.column_attrs}
+        """Convert the SQLAlchemy object to a dictionary with formatted date fields."""
+        data = {c.key: getattr(self, c.key) for c in inspect(self).mapper.column_attrs}
+
+        # Format date fields using format_date function
+        for date_field in ['pn_date_issued_to_contractor', 'date_of_application']:
+            data[date_field] = format_date(data.get(date_field))
+
+        return data    
 
 
 class ActivityLog(db.Model):
@@ -196,9 +221,12 @@ class EODDump(db.Model):
 
     def to_dict(self):
         result = {column.name: getattr(self, column.name) for column in self.__table__.columns}
-        result['Date'] = self.Date.strftime('%d-%m-%Y') if self.Date else None
+        
+        # Format date fields using format_date function
+        result['Date'] = format_date(self.Date)
+        result['Taken_To_Revenue_Date'] = format_date(self.Taken_To_Revenue_Date)
+
         return result
-        # return {column.name: getattr(self, column.name) for column in self.__table__.columns}
 
 
 

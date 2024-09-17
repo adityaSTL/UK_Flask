@@ -73,3 +73,9 @@ def validate_email_id(email):
         # Handle invalid email syntax
         print(f"Invalid email syntax: {str(e)}")
         return 0
+
+
+def format_date(date):
+    if date:
+        return date.strftime('%d-%m-%Y')  # Format the date as day-month-year
+    return None        

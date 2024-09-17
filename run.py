@@ -13,7 +13,7 @@ app.register_blueprint(client_blueprint,url_prefix='/api')
 app.register_blueprint(subcontractor_blueprint,url_prefix='/api')
 app.register_blueprint(pn_blueprint,url_prefix='/api')
 
-app.register_blueprint(graph_blueprint,url_prefix='/api')
+app.register_blueprint(graph_blueprint,url_prefix='/graph')
 
 app.register_blueprint(app4_blueprint)
 

@@ -1,7 +1,7 @@
 
 
 from flask import Blueprint
-from models import *
+from models import User
 from flask import Flask, request, jsonify
 from conf import app, db, engine, swagger, bcrypt, jwt, migrate, swagger
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, verify_jwt_in_request
@@ -9,11 +9,18 @@ from utils import role_required
 from helper_func import *
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from flask_jwt_extended import decode_token
-
+from werkzeug.utils import secure_filename
+import os
+from flask_cors import CORS
 
 users_blueprint = Blueprint('users', __name__)
 
 CORS(app)
+
+
+
+UPLOAD_FOLDER = '/home/administrator/flask/uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 @users_blueprint.route('/test')
 def home():
@@ -90,98 +97,102 @@ def login():
     return jsonify({"msg": "Invalid email_id or password"}), 401
 
 
+def allowed_file(filename):
+    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
 
 @users_blueprint.route('/register', methods=['POST'])
 @role_required(['admin'])
 @jwt_required()
 def register_user():
     """
-    Register a new user
+    Register a new user with optional profile image
     ---
     tags:
       - User Management
     security:
       - JWT: []
     parameters:
-      - name: body
-        in: body
+      - name: username
+        in: formData
         required: true
-        schema:
-          type: object
-          required:
-            - username
-            - password
-            - email_id
-            - role
-          properties:
-            username:
-              type: string
-              description: Unique username for the new user
-            password:
-              type: string
-              description: Password for the new user
-            email_id:
-              type: string
-              description: Unique email address for the new user
-            phone_no:
-              type: string
-              description: Phone number of the new user (optional)
-            role:
-              type: string
-              description: Role of the new user (e.g., admin, editor, viewer)
-            can_edit:
-              type: boolean
-              description: Whether the user has edit permissions (default is false)
+        type: string
+      - name: password
+        in: formData
+        required: true
+        type: string
+      - name: email_id
+        in: formData
+        required: true
+        type: string
+      - name: phone_no
+        in: formData
+        required: false
+        type: string
+      - name: role
+        in: formData
+        required: true
+        type: string
+      - name: can_edit
+        in: formData
+        required: false
+        type: boolean
+      - name: profile_image
+        in: formData
+        required: false
+        type: file
+        description: Profile image for the new user (optional, .jpg/.png formats only)
     responses:
       201:
         description: User registered successfully
-        schema:
-          type: object
-          properties:
-            message:
-              type: string
-              example: User registered successfully
       400:
         description: Bad request
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: Username, password, email_id, and role are required
       401:
         description: Unauthorized access
       403:
         description: Forbidden - User does not have admin role
     """
-    data = request.json
+    data = request.form
     username = data.get('username')
     password = data.get('password')
     email_id = data.get('email_id')
     phone_no = data.get('phone_no')
     role = data.get('role')
     can_edit = data.get('can_edit', False)
-    print(username,password,email_id,phone_no,role,can_edit)
 
+    # Set can_edit based on role
+    if role == 'admin' or role == 'editor':
+        can_edit = True
+    else:
+        can_edit = data.get('can_edit', False)  # Use provided value or default to False
 
-    
+    profile_image = request.files.get('profile_image')
+
     if not username or not password or not email_id or not role:
         return jsonify({'error': 'Username, password, email_id, and role are required'}), 400
 
-    if validate_email_id(email_id)==0:
-        return jsonify({'error': 'Email Id does not exists'}), 400
+    if validate_email_id(email_id) == 0:
+        return jsonify({'error': 'Email Id does not exist'}), 400
 
     if User.query.filter_by(email_id=email_id).first():
         return jsonify({'error': 'User already exists'}), 400
 
-    if User.query.filter_by(email_id=email_id).first():
-        return jsonify({'error': 'Email ID already in use'}), 400
+    if profile_image:
+        if allowed_file(profile_image.filename):
+            filename = secure_filename(profile_image.filename)
+            profile_image.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        else:
+            return jsonify({'error': 'Invalid file type, only JPG and PNG are allowed'}), 400
+    else:
+        filename = None  # Default if no image is provided
 
     hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-    new_user = User(username=username, password=hashed_password, email_id=email_id, phone_no=phone_no, role=role, can_edit=can_edit)
+    new_user = User(username=username, password=hashed_password, email_id=email_id, phone_no=phone_no, role=role, can_edit=can_edit, profile_image=filename)
+    
     db.session.add(new_user)
-    send_welcome_email(email_id,password,username)
     db.session.commit()
+    send_welcome_email(email_id, password, username)
 
     return jsonify({'message': 'User registered successfully'}), 201
 
@@ -367,50 +378,64 @@ def reset_password():
     return jsonify({'message': 'Password reset successfully'}), 200
 
 
+@users_blueprint.route('/testa')
+def testa():
+    try:
+        users = User.query.all()
+        return jsonify({"users": [user.to_dict() for user in users]})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 
 # Read a single user (if ID) else multiple users
-@app.route('/api/users', methods=['GET'])
-@app.route('/api/users/<int:id>', methods=['GET'])
+@users_blueprint.route('/users', methods=['GET'])
+@users_blueprint.route('/users/<int:id>', methods=['GET'])
 @jwt_required()
 @role_required(['admin'])
 def get_users(id=None):
     if id:
         # Fetch a single user by ID
-        user = User.query.get(id)
-        if not user:
-            return jsonify({"error": "User not found"}), 404
-        return jsonify({
-            'id': user.id,
-            'username': user.username,
-            'email_id': user.email_id,
-            'phone_no': user.phone_no,
-            'role': user.role,
-            'can_edit': user.can_edit
-        }), 200
+        try:
+          user = User.query.get(id)
+          if not user:
+              return jsonify({"error": "User not found"}), 404
+          return jsonify({"user": user.to_dict()}), 200
+        except Exception as e:
+          return jsonify({"error": str(e)})
+
     else:
         # Fetch all users if no ID is provided
-        users = User.query.all()
-        return jsonify([{
-            'id': user.id,
-            'username': user.username,
-            'email_id': user.email_id,
-            'phone_no': user.phone_no,
-            'role': user.role,
-            'can_edit': user.can_edit
-        } for user in users]), 200
+        try:
+          users = User.query.all()
+          return jsonify({"users": [user.to_dict() for user in users]}), 200
+        except Exception as e:
+          return jsonify({"error": str(e)})  
 
 
 
 # Update a user
 @users_blueprint.route('/users/<int:id>', methods=['PUT'])
 @jwt_required()
-@role_required(['admin'])
 def update_user(id):
+    current_user = User.query.filter_by(email_id=get_jwt_identity()).first()  # Get the currently logged-in user
     user = User.query.get(id)
+    
     if not user:
         return jsonify({"error": "User not found"}), 404
 
-    data = request.json
+    if not current_user:
+        return jsonify({"error": "User not found"}), 404
+
+
+    # Ensure non-admin users can only update their own data
+    if current_user.id != user.id and current_user.role != 'admin':
+        return jsonify({"error": "You can only update your own details unless you're an admin."}), 403
+
+    data = request.form  # Use request.form to get text data
+    profile_image = request.files.get('profile_image')  # Use request.files for the image
+
+    # Allow updating username, password, email, phone_no, and can_edit
     if 'username' in data:
         user.username = data['username']
     if 'password' in data:
@@ -419,13 +444,30 @@ def update_user(id):
         user.email_id = data['email_id']
     if 'phone_no' in data:
         user.phone_no = data['phone_no']
+
+    # Role update is only allowed for admins
     if 'role' in data:
-        user.role = data['role']
-    if 'can_edit' in data:
-        user.can_edit = data['can_edit']
+        if current_user.role=='admin':
+            user.role = data['role']
+        else:
+            return jsonify({"error": "You are not authorized to update the role."}), 403
+
+    # Handling profile image update
+    if profile_image:
+        if allowed_file(profile_image.filename):
+            filename = secure_filename(profile_image.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            
+            # Save the new profile image
+            profile_image.save(file_path)
+            
+            # Update the profile_image path in the database
+            user.profile_image = filename
+        else:
+            return jsonify({"error": "Invalid file type. Only JPG and PNG are allowed."}), 400
 
     db.session.commit()
-    return jsonify({"message": "User updated successfully"}), 200
+    return jsonify({"message": "User updated successfully", "user": user.to_dict()}), 200
 
 
 # Delete a user

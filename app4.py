@@ -1430,7 +1430,7 @@ def get_sum_cost_data():
 
 @app.route('/dashboard_data')
 @jwt_required()
-@role_required(['admin', 'editor'])
+@role_required(['admin', 'editor','viewer'])
 def dashboard_data():
     # Get all months with invoice data
     invoice_months = db.session.query(
@@ -1487,7 +1487,7 @@ cache = TTLCache(maxsize=100, ttl=3600)  # Cache for 1 hour
 
 @app.route('/api/dashboard_data1', methods=['GET'])
 @jwt_required()
-@role_required(['admin', 'editor'])
+@role_required(['admin', 'editor','viewer'])
 def dashboard_data1():
     try:
         # Check cache
@@ -1506,7 +1506,7 @@ def dashboard_data1():
                 (PnRaw.date_of_application >= six_months_ago, 'last_6_months'),
                 else_='older_months'
             ).label('period')
-        ).group_by('month', 'period').all()
+        ).group_by('month', 'period').order_by('month').all()
 
         # Revenue calculation query
         revenue_data = db.session.query(
@@ -1521,7 +1521,7 @@ def dashboard_data1():
             ClientRate, EODDump.Item_Mst_ID == ClientRate.rate_code
         ).group_by(
             'invoice_month', 'revenue_month'
-        ).all()
+        ).order_by('invoice_month', 'revenue_month').all()
 
         # Process the data
         result = process_data(invoice_data, revenue_data, six_months_ago)
@@ -1589,23 +1589,6 @@ def process_data(invoice_data, revenue_data, six_months_ago):
         'last_6_months': last_6_months_result + [summary],
         'older_months': older_months_result + [summary]
     }        
-
-
-
-
-
-@app.route('/api/manage_user', methods=['POST'])
-@jwt_required()
-@role_required(['admin'])
-def manage_user():
-    data = request.json
-    user = User.query.filter_by(username=data['username']).first()
-    if user:
-        user.role = data.get('role', user.role)
-        user.can_edit = data.get('can_edit', user.can_edit)
-        db.session.commit()
-        return jsonify({"success": True, "message": "User updated successfully"})
-    return jsonify({"success": False, "message": "User not found"}), 404
 
 
 
