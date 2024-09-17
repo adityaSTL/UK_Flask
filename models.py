@@ -148,6 +148,7 @@ class ClientRate(db.Model):
     include_hnd_in_service_price = db.Column(db.String(25))
     rates = db.Column(db.String(255))
     comments = db.Column(db.String(255))
+    
 
     def to_dict(self):
         return {column.name: getattr(self, column.name) for column in self.__table__.columns}

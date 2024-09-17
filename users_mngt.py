@@ -400,7 +400,7 @@ def get_users(id=None):
           user = User.query.get(id)
           if not user:
               return jsonify({"error": "User not found"}), 404
-          return jsonify({"user": user.to_dict()}), 200
+          return jsonify(user.to_dict()), 200
         except Exception as e:
           return jsonify({"error": str(e)})
 
@@ -408,7 +408,7 @@ def get_users(id=None):
         # Fetch all users if no ID is provided
         try:
           users = User.query.all()
-          return jsonify({"users": [user.to_dict() for user in users]}), 200
+          return jsonify([user.to_dict() for user in users]), 200
         except Exception as e:
           return jsonify({"error": str(e)})  
 
